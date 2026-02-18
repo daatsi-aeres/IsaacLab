@@ -35,8 +35,8 @@ class PickingCurriculumScheduler(ManagerTermBase):
         configured values.
 
     Phase 2 – Pick-success unlocked.
-        Triggered when the rolling mean *grasping* reward per step exceeds
-        ``phase2_grasping_threshold``.  The "pick_success" weight is enabled.
+        Triggered when the rolling mean *lifting* reward per step exceeds
+        ``phase2_lifting_threshold``.  The "pick_success" weight is enabled.
 
     Difficulty tracks clutter count independently of phase and continues to
     ramp up throughout training.
@@ -49,9 +49,8 @@ class PickingCurriculumScheduler(ManagerTermBase):
     promotion_only           : bool  = False
     history_size             : int   = 500   # rolling episode window
     phase1_reaching_threshold: float = 0.5   # weighted reward/step > this → phase 1
-    phase2_grasping_threshold: float = 0.75  # weighted reward/step > this → phase 2
-    phase1_terms             : dict  = {"grasping_target": 3.0,
-                                        "lifting_target": 5.0,
+    phase2_lifting_threshold: float = 0.75  # weighted reward/step > this → phase 2
+    phase1_terms             : dict  = {"lifting_target": 5.0,
                                         "declutter": 2.0}
     phase2_terms             : dict  = {"pick_success": 1.0}
     """
@@ -68,14 +67,14 @@ class PickingCurriculumScheduler(ManagerTermBase):
         self._phase = 0
         history_size = cfg.params.get("history_size", 500)
         self._reaching_history: deque[float] = deque(maxlen=history_size)
-        self._grasping_history: deque[float] = deque(maxlen=history_size)
+        self._lifting_history: deque[float] = deque(maxlen=history_size)
 
         self._phase1_threshold = cfg.params.get("phase1_reaching_threshold", 0.5)
-        self._phase2_threshold = cfg.params.get("phase2_grasping_threshold", 0.75)
+        self._phase2_threshold = cfg.params.get("phase2_lifting_threshold", 0.75)
 
         self._phase1_terms: dict[str, float] = cfg.params.get(
             "phase1_terms",
-            {"grasping_target": 3.0, "lifting_target": 5.0, "declutter": 2.0},
+            {"lifting_target": 5.0, "declutter": 2.0},
         )
         self._phase2_terms: dict[str, float] = cfg.params.get(
             "phase2_terms",
@@ -85,7 +84,7 @@ class PickingCurriculumScheduler(ManagerTermBase):
         # Reward-manager term indices resolved lazily on first __call__
         self._rm_initialized = False
         self._reaching_key: str | None = None
-        self._grasping_key: str | None = None
+        self._lifting_key: str | None = None
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -96,7 +95,7 @@ class PickingCurriculumScheduler(ManagerTermBase):
 
         # Keys for reading episode sums
         self._reaching_key = "reaching_target" if "reaching_target" in names else None
-        self._grasping_key = "grasping_target" if "grasping_target" in names else None
+        self._lifting_key = "lifting_target" if "lifting_target" in names else None
 
         # Indices for modifying weights
         self._phase1_indices: dict[str, int] = {
@@ -146,7 +145,7 @@ class PickingCurriculumScheduler(ManagerTermBase):
         # The remaining params are read from cfg.params in __init__ instead:
         history_size: int = 500,
         phase1_reaching_threshold: float = 0.5,
-        phase2_grasping_threshold: float = 0.75,
+        phase2_lifting_threshold: float = 0.75,
         phase1_terms: dict | None = None,
         phase2_terms: dict | None = None,
     ):
@@ -180,11 +179,11 @@ class PickingCurriculumScheduler(ManagerTermBase):
                 for v in (ep_sums / max_ep_len).tolist():
                     self._reaching_history.append(float(v))
 
-            # Grasping: only meaningful after phase 1 (weight > 0)
-            if self._phase >= 1 and self._grasping_key and self._grasping_key in rm._episode_sums:
-                ep_sums = rm._episode_sums[self._grasping_key][env_ids]
+            # Lifting: only meaningful after phase 1 (weight > 0)
+            if self._phase >= 1 and self._lifting_key and self._lifting_key in rm._episode_sums:
+                ep_sums = rm._episode_sums[self._lifting_key][env_ids]
                 for v in (ep_sums / max_ep_len).tolist():
-                    self._grasping_history.append(float(v))
+                    self._lifting_history.append(float(v))
 
             # ── Phase advancement ─────────────────────────────────────────────
             MIN_HISTORY = 50  # require at least this many completed episodes
@@ -197,13 +196,13 @@ class PickingCurriculumScheduler(ManagerTermBase):
                     print(f"[PickingCurriculum] *** PHASE 0→1 *** "
                           f"(mean reaching/step={mean_reaching:.3f} ≥ {self._phase1_threshold})")
 
-            elif self._phase == 1 and len(self._grasping_history) >= MIN_HISTORY:
-                mean_grasping = sum(self._grasping_history) / len(self._grasping_history)
-                if mean_grasping >= self._phase2_threshold:
+            elif self._phase == 1 and len(self._lifting_history) >= MIN_HISTORY:
+                mean_lifting = sum(self._lifting_history) / len(self._lifting_history)
+                if mean_lifting >= self._phase2_threshold:
                     self._phase = 2
                     self._set_phase_weights(env, 2)
                     print(f"[PickingCurriculum] *** PHASE 1→2 *** "
-                          f"(mean grasping/step={mean_grasping:.3f} ≥ {self._phase2_threshold})")
+                          f"(mean lifting/step={mean_lifting:.3f} ≥ {self._phase2_threshold})")
 
         # ── Clutter difficulty ────────────────────────────────────────────────
         target_object: RigidObject = env.scene[object_cfg.name]

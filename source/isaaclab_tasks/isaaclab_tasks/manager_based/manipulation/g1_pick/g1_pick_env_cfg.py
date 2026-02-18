@@ -44,7 +44,7 @@ _DROP_Z     = 0.500   # below this → object fell off table → episode termina
 
 @configclass
 class G1PickSceneCfg(InteractiveSceneCfg):
-    """Scene: G1 + Inspire hands, table, tray, target object, 3 distractors, contact sensors."""
+    """Scene: G1 + Inspire hands, table, tray, target object, 3 distractors."""
 
     # Required so MultiAssetSpawnerCfg assigns different shapes per env instead of
     # copying env_0's PhysX mesh to all other environments.
@@ -96,12 +96,12 @@ class G1PickSceneCfg(InteractiveSceneCfg):
                     physics_material=RigidBodyMaterialCfg(static_friction=0.5, dynamic_friction=0.5),
                     visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
                 ),
-                CapsuleCfg(
-                    radius=0.02,
-                    height=0.06,
-                    physics_material=RigidBodyMaterialCfg(static_friction=0.5, dynamic_friction=0.5),
-                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
-                ),
+                # CapsuleCfg(
+                #     radius=0.02,
+                #     height=0.06,
+                #     physics_material=RigidBodyMaterialCfg(static_friction=0.5, dynamic_friction=0.5),
+                #     visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
+                # ),
             ],
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=16,
@@ -160,22 +160,8 @@ class G1PickSceneCfg(InteractiveSceneCfg):
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.4, 0.0, -5.0]),
     )
 
-    # ── Contact sensors: Inspire fingertips ───────────────────────────────────
-    # With merge_fixed_joints=True, force-sensor links are merged into the finger links.
-    # Fingertip prims: left/right_thumb_4, left/right_{index,middle,ring,little}_2
-    # debug_vis=True draws contact force arrows in the viewport.
-    left_contact_sensor = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/left_(thumb_4|index_2|middle_2|ring_2|little_2)",
-        update_period=0.0,
-        history_length=3,
-        debug_vis=True,
-    )
-    right_contact_sensor = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/right_(thumb_4|index_2|middle_2|ring_2|little_2)",
-        update_period=0.0,
-        history_length=3,
-        debug_vis=True,
-    )
+    left_contact_sensor = None
+    right_contact_sensor = None
 
     # ── Ground + lighting ─────────────────────────────────────────────────────
     plane = AssetBaseCfg(
@@ -390,7 +376,7 @@ class RewardsCfg:
 
     Phase gating summary (managed by PickingCurriculumScheduler):
       Phase 0  →  reaching_target + left_penalty (always on)
-      Phase 1  →  + grasping_target + lifting_target + declutter
+      Phase 1  →  + lifting_target + declutter
       Phase 2  →  + pick_success
 
     Terms that start at weight=0 are enabled by the curriculum at runtime.
@@ -435,15 +421,7 @@ class RewardsCfg:
 
     # ── Phase 1: RIGHT hand grasps, LEFT hand declutters ─────────────────────
     # weight=0 → curriculum enables this at phase 1 (target weight 3.0)
-    grasping_target = RewTerm(
-        func=mdp.target_object_grasping_reward,
-        params={
-            "threshold": 0.5,
-            "contact_sensor_name": "right_contact_sensor",  # right hand only
-            "min_contacts": 1,
-        },
-        weight=0.0,
-    )
+    grasping_target = None
 
     # weight=0 → curriculum enables this at phase 1 (target weight 5.0)
     lifting_target = RewTerm(
@@ -529,9 +507,9 @@ class CurriculumCfg:
             # Phase 1→2: mean weighted grasping-reward/step must exceed this.
             # grasping weight=3.0, max raw reward/step=3.0 (binary×3) →
             #   0.75 means right hand in contact ~25% of episode steps.
-            "phase2_grasping_threshold": 0.75,
+            "phase2_lifting_threshold": 0.75,
             # Reward weights to enable at each phase transition.
-            "phase1_terms": {"grasping_target": 3.0, "lifting_target": 5.0, "declutter": 2.0},
+            "phase1_terms": {"lifting_target": 5.0, "declutter": 2.0},
             "phase2_terms": {"pick_success": 1.0},
         },
     )
