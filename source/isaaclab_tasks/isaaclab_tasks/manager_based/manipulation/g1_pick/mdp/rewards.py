@@ -24,13 +24,16 @@ def target_object_reaching_reward(
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
 ) -> torch.Tensor:
-    """Reward the RIGHT hand fingertips for moving close to the target object.
+    """Reward ALL right-hand fingertips for moving close to the target object.
 
-    Only right-hand fingertip body_ids should be supplied via robot_cfg.body_names.
-    Left hand is left free to learn the declutter task.
+    Uses the MEAN across all fingertips rather than the minimum.  This forces
+    every finger to converge on the object, creating the wrapping/encircling
+    posture needed for a stable grasp.  A min() reward is satisfied by one
+    fingertip poking the object — mean() is only maximised when all fingers
+    surround it.
 
     Returns:
-        Tensor (num_envs,): values in [0, 1].
+        Tensor (num_envs,): mean per-fingertip reward, values in [0, 1].
     """
     robot: Articulation = env.scene[robot_cfg.name]
     target_object: RigidObject = env.scene[object_cfg.name]
@@ -39,8 +42,8 @@ def target_object_reaching_reward(
     object_pos_w = target_object.data.root_pos_w.unsqueeze(1)         # (N, 1, 3)
 
     distances = torch.norm(fingertip_pos_w - object_pos_w, dim=-1)    # (N, 5)
-    min_distance = distances.min(dim=-1).values                        # (N,)
-    return 1.0 - torch.tanh(min_distance / std)
+    per_tip = 1.0 - torch.tanh(distances / std)                        # (N, 5)
+    return per_tip.mean(dim=-1)                                        # (N,)
 
 
 def target_object_grasping_reward(
@@ -73,15 +76,75 @@ def target_object_lift_reward(
     env: ManagerBasedRLEnv,
     minimal_height: float,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+    scale: float = 0.08,
+    robot_cfg: SceneEntityCfg | None = None,
+    proximity_std: float | None = None,
 ) -> torch.Tensor:
-    """Smooth reward for lifting the target object above minimal_height.
+    """Continuous lift reward, optionally coupled with fingertip proximity.
+
+    Args:
+        minimal_height: Baseline height [m above env origin] — set to the object's
+            resting height so the reward is non-zero from the first millimetre of lift.
+        scale: tanh denominator [m] — how quickly the height component saturates.
+        robot_cfg: If provided (with right-hand fingertip body_ids), the reward is
+            multiplied by a proximity term so that lift reward is only earned when
+            the hand is simultaneously near the object.  This is the key coupling
+            that prevents the robot ignoring the hand while getting lift reward
+            from accidental object movement.
+        proximity_std: tanh length scale [m] for the proximity multiplier.
+            Typical value: 0.10 m.  Required when robot_cfg is provided.
 
     Returns:
         Tensor (num_envs,): values in [0, 1].
     """
     target_object: RigidObject = env.scene[object_cfg.name]
     object_height = target_object.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
-    return torch.tanh((object_height - minimal_height) / 0.02).clamp(0.0, 1.0)
+    lift = torch.tanh((object_height - minimal_height) / scale).clamp(0.0, 1.0)
+
+    if robot_cfg is not None and proximity_std is not None:
+        robot: Articulation = env.scene[robot_cfg.name]
+        fingertip_pos_w = robot.data.body_pos_w[:, robot_cfg.body_ids]       # (N, 5, 3)
+        object_pos_w = target_object.data.root_pos_w.unsqueeze(1)             # (N, 1, 3)
+        min_dist = torch.norm(fingertip_pos_w - object_pos_w, dim=-1).min(dim=-1).values
+        proximity = 1.0 - torch.tanh(min_dist / proximity_std)               # (N,)
+        return lift * proximity
+
+    return lift
+
+
+def object_upward_velocity_reward(
+    env: ManagerBasedRLEnv,
+    scale: float = 0.05,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+) -> torch.Tensor:
+    """Reward upward velocity of the target object (kept for reference, disable via weight=0)."""
+    target_object: RigidObject = env.scene[object_cfg.name]
+    vel_z = target_object.data.root_lin_vel_w[:, 2]
+    return torch.tanh(vel_z / scale).clamp(0.0, 1.0)
+
+
+def object_velocity_penalty(
+    env: ManagerBasedRLEnv,
+    scale: float = 0.1,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+) -> torch.Tensor:
+    """Penalise total object speed (all axes) to discourage shaking/vibration.
+
+    When the robot shakes the object to exploit a velocity reward, the total
+    speed is high even though the net height gain is zero.  This penalty makes
+    shaking strictly costly while still allowing deliberate slow lifting
+    (low speed, sustained height gain).
+
+    Args:
+        scale: tanh denominator [m/s].  0.1 m/s → penalty ≈ 0.46 at that speed.
+            Set lower (e.g. 0.05) to punish even small vibrations more harshly.
+
+    Returns:
+        Tensor (num_envs,): values in [-1, 0].
+    """
+    target_object: RigidObject = env.scene[object_cfg.name]
+    speed = torch.norm(target_object.data.root_lin_vel_w, dim=-1)   # (N,) total speed
+    return -torch.tanh(speed / scale)
 
 
 def left_hand_declutter_reward(
@@ -90,6 +153,7 @@ def left_hand_declutter_reward(
     robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     distractor_names: list[str] | None = None,
     target_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+    min_active_height: float = 0.65,
 ) -> torch.Tensor:
     """Reward the LEFT hand for moving distractors away from the target object.
 
@@ -97,13 +161,18 @@ def left_hand_declutter_reward(
       1. Near reward  – LEFT fingertips close to the nearest active distractor.
       2. Spread reward – mean distance of active distractors from the target.
 
-    When no distractors are active (all hidden at z=-5) the function returns 0.
+    When no distractors are on the tray the function returns 0.
 
     Args:
         std: Length scale [m] for the near-reward tanh kernel.
         robot_cfg: Must contain the LEFT hand fingertip body_ids.
         distractor_names: List of scene entity names for distractor rigid objects.
         target_cfg: Scene entity for the target object.
+        min_active_height: Minimum height above env origin [m] for a distractor to
+            be considered "on the tray". Default 0.65 m — well above the ground
+            plane (0 m) but below the tray surface (0.82 m). This prevents hidden
+            distractors that were pushed up to the ground plane by physics from
+            being mistakenly counted as active.
 
     Returns:
         Tensor (num_envs,): values in [0, 1].
@@ -119,6 +188,7 @@ def left_hand_declutter_reward(
 
     left_tips = robot.data.body_pos_w[:, robot_cfg.body_ids]  # (N, 5, 3)
     target_pos = target.data.root_pos_w                        # (N, 3)
+    env_origin_z = env.scene.env_origins[:, 2]                 # (N,)
 
     # Accumulators
     best_near = torch.zeros(n_envs, device=device)
@@ -132,7 +202,13 @@ def left_hand_declutter_reward(
             continue
 
         obj_pos = obj.data.root_pos_w                  # (N, 3)
-        active = (obj_pos[:, 2] > -4.0).float()        # 1 if on table, 0 if hidden
+        # Active = distractor is on/above the tray, not hiding below the table.
+        # We check height relative to env origin so this works for all env grid
+        # positions.  min_active_height=0.65 m is above the ground plane (0 m)
+        # but below the tray surface (0.82 m), so a distractor resting on the
+        # ground after physics pushed it up from z=-5 is NOT counted as active.
+        obj_z_local = obj_pos[:, 2] - env_origin_z
+        active = (obj_z_local > min_active_height).float()
 
         # Left fingertips → this distractor (minimum over 5 tips)
         dists = torch.norm(left_tips - obj_pos.unsqueeze(1), dim=-1).min(dim=-1).values  # (N,)

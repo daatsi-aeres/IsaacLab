@@ -69,7 +69,7 @@ class PickingCurriculumScheduler(ManagerTermBase):
         self._reaching_history: deque[float] = deque(maxlen=history_size)
         self._lifting_history: deque[float] = deque(maxlen=history_size)
 
-        self._phase1_threshold = cfg.params.get("phase1_reaching_threshold", 0.5)
+        self._phase1_threshold = cfg.params.get("phase1_reaching_threshold", 0.4)
         self._phase2_threshold = cfg.params.get("phase2_lifting_threshold", 0.75)
 
         self._phase1_terms: dict[str, float] = cfg.params.get(
@@ -176,13 +176,13 @@ class PickingCurriculumScheduler(ManagerTermBase):
             # Reaching: always track
             if self._reaching_key and self._reaching_key in rm._episode_sums:
                 ep_sums = rm._episode_sums[self._reaching_key][env_ids]
-                for v in (ep_sums / max_ep_len).tolist():
+                for v in ep_sums.tolist():
                     self._reaching_history.append(float(v))
 
             # Lifting: only meaningful after phase 1 (weight > 0)
             if self._phase >= 1 and self._lifting_key and self._lifting_key in rm._episode_sums:
                 ep_sums = rm._episode_sums[self._lifting_key][env_ids]
-                for v in (ep_sums / max_ep_len).tolist():
+                for v in ep_sums.tolist():
                     self._lifting_history.append(float(v))
 
             # ── Phase advancement ─────────────────────────────────────────────
@@ -194,7 +194,7 @@ class PickingCurriculumScheduler(ManagerTermBase):
                     self._phase = 1
                     self._set_phase_weights(env, 1)
                     print(f"[PickingCurriculum] *** PHASE 0→1 *** "
-                          f"(mean reaching/step={mean_reaching:.3f} ≥ {self._phase1_threshold})")
+                          f"(mean reaching sum={mean_reaching:.3f} ≥ {self._phase1_threshold})")
 
             elif self._phase == 1 and len(self._lifting_history) >= MIN_HISTORY:
                 mean_lifting = sum(self._lifting_history) / len(self._lifting_history)
@@ -202,7 +202,7 @@ class PickingCurriculumScheduler(ManagerTermBase):
                     self._phase = 2
                     self._set_phase_weights(env, 2)
                     print(f"[PickingCurriculum] *** PHASE 1→2 *** "
-                          f"(mean lifting/step={mean_lifting:.3f} ≥ {self._phase2_threshold})")
+                          f"(mean lifting sum={mean_lifting:.3f} ≥ {self._phase2_threshold})")
 
         # ── Clutter difficulty ────────────────────────────────────────────────
         target_object: RigidObject = env.scene[object_cfg.name]

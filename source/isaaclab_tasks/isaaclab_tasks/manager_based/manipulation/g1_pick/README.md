@@ -119,3 +119,11 @@ g1_pick/
   --headless \
   --num_envs 1024 \
   --video --video_length 600 --video_interval 2000
+
+
+
+
+  ./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py   --task Isaac-G1-Pick-v0 --resume --load_run 2026-02-18_00_08-34 --checkpoint model_5050.pt --headless --video --video_interval 2000 --num_envs 900 --max_iterations 10000 
+
+
+  ./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py --task Isaac-G1-Pick-v0 --resume --load_run 2026-02-18_02-37-49 --checkpoint model_11550.pt --headless --video --video_interval 2000 --num_envs 900 --max_iterations 10000 

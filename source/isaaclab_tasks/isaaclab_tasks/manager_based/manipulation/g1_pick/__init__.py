@@ -26,6 +26,7 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": G1PickEnvCfg,
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1PickPPORunnerCfg",
     },
 )
 
@@ -36,5 +37,6 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": G1PickEnvCfg_PLAY,
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1PickPPORunnerCfg",
     },
 )

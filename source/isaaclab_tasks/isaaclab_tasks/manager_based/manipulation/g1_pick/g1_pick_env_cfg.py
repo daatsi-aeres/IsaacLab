@@ -88,14 +88,14 @@ class G1PickSceneCfg(InteractiveSceneCfg):
             assets_cfg=[
                 CuboidCfg(
                     size=(0.05, 0.05, 0.05),
-                    physics_material=RigidBodyMaterialCfg(static_friction=0.5, dynamic_friction=0.5),
+                    physics_material=RigidBodyMaterialCfg(static_friction=1.5, dynamic_friction=1.5),
                     visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
                 ),
-                SphereCfg(
-                    radius=0.03,
-                    physics_material=RigidBodyMaterialCfg(static_friction=0.5, dynamic_friction=0.5),
-                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
-                ),
+                # SphereCfg(
+                #     radius=0.03,
+                #     physics_material=RigidBodyMaterialCfg(static_friction=0.5, dynamic_friction=0.5),
+                #     visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
+                # ),
                 # CapsuleCfg(
                 #     radius=0.02,
                 #     height=0.06,
@@ -108,7 +108,7 @@ class G1PickSceneCfg(InteractiveSceneCfg):
                 solver_velocity_iteration_count=1,
                 disable_gravity=False,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.4, 0.0, _OBJ_INIT_Z]),
@@ -423,12 +423,25 @@ class RewardsCfg:
     # weight=0 → curriculum enables this at phase 1 (target weight 3.0)
     grasping_target = None
 
-    # weight=0 → curriculum enables this at phase 1 (target weight 5.0)
+    # weight=0 → curriculum enables this at phase 1.
+    # No proximity coupling: the robot already learned to hold the cube,
+    # so coupling only adds noise.  Pure height signal is cleanest now.
     lifting_target = RewTerm(
         func=mdp.target_object_lift_reward,
-        params={"minimal_height": _LIFT_Z, "object_cfg": SceneEntityCfg("target_object")},
+        params={
+            "minimal_height": _OBJ_INIT_Z,   # 0.850 m — object resting height
+            "scale": 0.08,
+            "object_cfg": SceneEntityCfg("target_object"),
+        },
         weight=0.0,
     )
+
+    # Penalise total object speed (all axes).
+    # Kills shaking/vibration strategies: any oscillation costs reward regardless
+    # of direction, while slow deliberate lifting has near-zero speed penalty.
+    # Always active so the robot can't exploit velocity rewards via shaking
+    # even before phase 1.
+    object_vel_penalty = None
 
     # weight=0 → curriculum enables this at phase 1 (target weight 2.0)
     # LEFT hand fingertips in body_names; distractors passed by name.
@@ -445,6 +458,11 @@ class RewardsCfg:
             ),
             "distractor_names": ["distractor_0", "distractor_1", "distractor_2"],
             "target_cfg": SceneEntityCfg("target_object"),
+            # 0.65 m above env origin: above ground plane (0 m) but below
+            # tray surface (0.82 m).  Hidden distractors rest on the ground
+            # at ~0.025 m after physics pushes them up from z=-5 m, so they
+            # correctly read as inactive.
+            "min_active_height": 0.65,
         },
         weight=0.0,
     )
@@ -503,14 +521,14 @@ class CurriculumCfg:
             # Phase 0→1: mean weighted reaching-reward/step must exceed this.
             # reaching weight=1.0, max raw reward/step=1.0 →
             #   0.5 means hand is within ~5 cm of target for >50% of each episode.
-            "phase1_reaching_threshold": 0.5,
+            "phase1_reaching_threshold": 0.3,
             # Phase 1→2: mean weighted grasping-reward/step must exceed this.
             # grasping weight=3.0, max raw reward/step=3.0 (binary×3) →
             #   0.75 means right hand in contact ~25% of episode steps.
             "phase2_lifting_threshold": 0.75,
             # Reward weights to enable at each phase transition.
-            "phase1_terms": {"lifting_target": 5.0, "declutter": 2.0},
-            "phase2_terms": {"pick_success": 1.0},
+            "phase1_terms": {"lifting_target": 10.0, "declutter": 2.0},
+            "phase2_terms": {"pick_success": 20.0},
         },
     )
 
