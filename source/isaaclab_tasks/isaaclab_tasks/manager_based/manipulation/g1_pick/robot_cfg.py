@@ -27,9 +27,11 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UrdfFileCfg
 
+import os
 # URDF must live next to its meshes/ folder so relative paths resolve
-_URDF_PATH = (
-    "/home/daatsi-aeres/ARCLab_ws/unitree_ros/robots/g1_description/"
+_URDF_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "g1_description",
     "g1_29dof_rev_1_0_with_inspire_hand_FTP.urdf"
 )
 
