@@ -403,21 +403,21 @@ class RewardsCfg:
 
     # Always active: soft penalty when LEFT hand drifts toward the target.
     # std=0.15 m gives a gentle gradient rather than a hard boundary.
-    left_penalty = RewTerm(
-        func=mdp.left_hand_near_target_penalty,
-        params={
-            "std": 0.15,
-            "robot_cfg": SceneEntityCfg(
-                "robot",
-                body_names=[
-                    "left_thumb_4", "left_index_2", "left_middle_2",
-                    "left_ring_2", "left_little_2",
-                ],
-            ),
-            "object_cfg": SceneEntityCfg("target_object"),
-        },
-        weight=0.3,  # small, just enough to break symmetry
-    )
+    # left_penalty = RewTerm(
+    #     func=mdp.left_hand_near_target_penalty,
+    #     params={
+    #         "std": 0.15,
+    #         "robot_cfg": SceneEntityCfg(
+    #             "robot",
+    #             body_names=[
+    #                 "left_thumb_4", "left_index_2", "left_middle_2",
+    #                 "left_ring_2", "left_little_2",
+    #             ],
+    #         ),
+    #         "object_cfg": SceneEntityCfg("target_object"),
+    #     },
+    #     weight=0.3,  # small, just enough to break symmetry
+    # )
 
     # ── Phase 1: RIGHT hand grasps, LEFT hand declutters ─────────────────────
     # weight=0 → curriculum enables this at phase 1 (target weight 3.0)
@@ -433,7 +433,7 @@ class RewardsCfg:
             "scale": 0.08,
             "object_cfg": SceneEntityCfg("target_object"),
         },
-        weight=0.0,
+        weight=10.0,
     )
 
     # Penalise total object speed (all axes).
@@ -445,27 +445,27 @@ class RewardsCfg:
 
     # weight=0 → curriculum enables this at phase 1 (target weight 2.0)
     # LEFT hand fingertips in body_names; distractors passed by name.
-    declutter = RewTerm(
-        func=mdp.left_hand_declutter_reward,
-        params={
-            "std": 0.12,
-            "robot_cfg": SceneEntityCfg(
-                "robot",
-                body_names=[
-                    "left_thumb_4", "left_index_2", "left_middle_2",
-                    "left_ring_2", "left_little_2",
-                ],
-            ),
-            "distractor_names": ["distractor_0", "distractor_1", "distractor_2"],
-            "target_cfg": SceneEntityCfg("target_object"),
-            # 0.65 m above env origin: above ground plane (0 m) but below
-            # tray surface (0.82 m).  Hidden distractors rest on the ground
-            # at ~0.025 m after physics pushes them up from z=-5 m, so they
-            # correctly read as inactive.
-            "min_active_height": 0.65,
-        },
-        weight=0.0,
-    )
+    # declutter = RewTerm(
+    #     func=mdp.left_hand_declutter_reward,
+    #     params={
+    #         "std": 0.12,
+    #         "robot_cfg": SceneEntityCfg(
+    #             "robot",
+    #             body_names=[
+    #                 "left_thumb_4", "left_index_2", "left_middle_2",
+    #                 "left_ring_2", "left_little_2",
+    #             ],
+    #         ),
+    #         "distractor_names": ["distractor_0", "distractor_1", "distractor_2"],
+    #         "target_cfg": SceneEntityCfg("target_object"),
+    #         # 0.65 m above env origin: above ground plane (0 m) but below
+    #         # tray surface (0.82 m).  Hidden distractors rest on the ground
+    #         # at ~0.025 m after physics pushes them up from z=-5 m, so they
+    #         # correctly read as inactive.
+    #         "min_active_height": 0.65,
+    #     },
+    #     weight=0.0,
+    # )
 
     # ── Phase 2: pick-success bonus ───────────────────────────────────────────
     # weight=0 → curriculum enables this at phase 2 (target weight 1.0)
@@ -476,16 +476,16 @@ class RewardsCfg:
             "hold_time_threshold": 1.0,
             "object_cfg": SceneEntityCfg("target_object"),
         },
-        weight=0.0,
+        weight=20.0,
     )
 
-    # ── Action smoothness penalties (always active) ───────────────────────────
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001)
-    joint_vel = RewTerm(
-        func=mdp.joint_vel_l2,
-        weight=-0.0001,
-        params={"asset_cfg": SceneEntityCfg("robot")},
-    )
+    # # ── Action smoothness penalties (always active) ───────────────────────────
+    # action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001)
+    # joint_vel = RewTerm(
+    #     func=mdp.joint_vel_l2,
+    #     weight=-0.0001,
+    #     params={"asset_cfg": SceneEntityCfg("robot")},
+    # )
 
 
 @configclass
@@ -505,32 +505,32 @@ class TerminationsCfg:
 class CurriculumCfg:
     """Curriculum terms for the MDP."""
 
-    picking_curriculum = CurrTerm(
-        func=mdp.PickingCurriculumScheduler,
-        params={
-            # ── Clutter difficulty ────────────────────────────────────────────
-            "object_cfg": SceneEntityCfg("target_object"),
-            "lift_height_threshold": _LIFT_Z,
-            "init_difficulty": 0,
-            "min_difficulty": 0,
-            "max_difficulty": 60,
-            "promotion_only": False,
-            # ── Phase gating ──────────────────────────────────────────────────
-            # Rolling window size (number of completed episodes tracked).
-            "history_size": 500,
-            # Phase 0→1: mean weighted reaching-reward/step must exceed this.
-            # reaching weight=1.0, max raw reward/step=1.0 →
-            #   0.5 means hand is within ~5 cm of target for >50% of each episode.
-            "phase1_reaching_threshold": 0.3,
-            # Phase 1→2: mean weighted grasping-reward/step must exceed this.
-            # grasping weight=3.0, max raw reward/step=3.0 (binary×3) →
-            #   0.75 means right hand in contact ~25% of episode steps.
-            "phase2_lifting_threshold": 0.75,
-            # Reward weights to enable at each phase transition.
-            "phase1_terms": {"lifting_target": 10.0, "declutter": 2.0},
-            "phase2_terms": {"pick_success": 20.0},
-        },
-    )
+    # picking_curriculum = CurrTerm(
+    #     func=mdp.PickingCurriculumScheduler,
+    #     params={
+    #         # ── Clutter difficulty ────────────────────────────────────────────
+    #         "object_cfg": SceneEntityCfg("target_object"),
+    #         "lift_height_threshold": _LIFT_Z,
+    #         "init_difficulty": 0,
+    #         "min_difficulty": 0,
+    #         "max_difficulty": 60,
+    #         "promotion_only": False,
+    #         # ── Phase gating ──────────────────────────────────────────────────
+    #         # Rolling window size (number of completed episodes tracked).
+    #         "history_size": 500,
+    #         # Phase 0→1: mean weighted reaching-reward/step must exceed this.
+    #         # reaching weight=1.0, max raw reward/step=1.0 →
+    #         #   0.5 means hand is within ~5 cm of target for >50% of each episode.
+    #         "phase1_reaching_threshold": 0.5,
+    #         # Phase 1→2: mean weighted grasping-reward/step must exceed this.
+    #         # grasping weight=3.0, max raw reward/step=3.0 (binary×3) →
+    #         #   0.75 means right hand in contact ~25% of episode steps.
+    #         "phase2_lifting_threshold": 0.75,
+    #         # Reward weights to enable at each phase transition.
+    #         "phase1_terms": {"lifting_target": 10.0, "declutter": 2.0},
+    #         "phase2_terms": {"pick_success": 20.0},
+    #     },
+    # )
 
 
 ##
@@ -585,4 +585,4 @@ class G1PickEnvCfg_PLAY(G1PickEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 64
-        self.curriculum.picking_curriculum.params["init_difficulty"] = 60
+        # self.curriculum.picking_curriculum.params["init_difficulty"] = 60

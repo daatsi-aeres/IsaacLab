@@ -99,7 +99,8 @@ def target_object_lift_reward(
     """
     target_object: RigidObject = env.scene[object_cfg.name]
     object_height = target_object.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
-    lift = torch.tanh((object_height - minimal_height) / scale).clamp(0.0, 1.0)
+    # lift = torch.tanh((object_height - minimal_height) / scale).clamp(0.0, 1.0)
+    lift = ((object_height - minimal_height) / scale).clamp(0.0, 1.0)
 
     if robot_cfg is not None and proximity_std is not None:
         robot: Articulation = env.scene[robot_cfg.name]
