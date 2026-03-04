@@ -59,8 +59,8 @@ x-default-isaac-lab-volumes: &default-isaac-lab-volumes
   - type: volume
     source: isaac-lab-docs
     target: ${DOCKER_ISAACLAB_PATH}/docs/_build
-  - type: volume
-    source: isaac-lab-logs
+  - type: bind
+    source: ../logs
     target: ${DOCKER_ISAACLAB_PATH}/logs
   - type: volume
     source: isaac-lab-data
