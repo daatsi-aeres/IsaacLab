@@ -23,6 +23,7 @@ from isaaclab.sim import CuboidCfg, SphereCfg, CapsuleCfg, RigidBodyMaterialCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
+from isaaclab.envs import ManagerBasedRLEnvCfg, ViewerCfg
 
 from .robot_cfg import G1_INSPIRE_CFG
 from . import mdp
@@ -398,7 +399,7 @@ class RewardsCfg:
             ),
             "object_cfg": SceneEntityCfg("target_object"),
         },
-        weight=1.0,
+        weight=0.05,
     )
 
     # Always active: soft penalty when LEFT hand drifts toward the target.
@@ -430,11 +431,28 @@ class RewardsCfg:
         func=mdp.target_object_lift_reward,
         params={
             "minimal_height": _OBJ_INIT_Z,   # 0.850 m — object resting height
-            "scale": 0.08,
+            "scale": 0.03,
             "object_cfg": SceneEntityCfg("target_object"),
         },
         weight=10.0,
     )
+
+    finger_grip_reward = RewTerm(
+        func=mdp.finger_grip_reward,
+        params={
+            "robot_cfg": SceneEntityCfg(
+                "robot",
+                body_names=[
+                    "right_thumb_4", "right_index_2", "right_middle_2",
+                    "right_ring_2", "right_little_2",
+                ],
+            ),
+            "object_cfg": SceneEntityCfg("target_object"),
+            "proximity_std": 0.02,
+        },
+        weight=5.0,
+    )
+
 
     # Penalise total object speed (all axes).
     # Kills shaking/vibration strategies: any oscillation costs reward regardless
@@ -472,7 +490,7 @@ class RewardsCfg:
     pick_success = RewTerm(
         func=mdp.pick_success_reward,
         params={
-            "minimal_height": _LIFT_Z,
+            "minimal_height": 0.870,  # 20 cm above table top (0.80 m) and 2 cm above initial object height (0.85 m)
             "hold_time_threshold": 1.0,
             "object_cfg": SceneEntityCfg("target_object"),
         },
@@ -543,6 +561,14 @@ class G1PickEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the G1 + Inspire-hand picking environment."""
 
     scene: G1PickSceneCfg = G1PickSceneCfg(num_envs=4096, env_spacing=3.0)
+
+    # --- ADD THIS VIEWER BLOCK ---
+    viewer: ViewerCfg = ViewerCfg(
+        resolution=(640, 480),
+        eye=(1.5, 0.0, 1.0),
+        lookat=(0.0, 0.0, 0.5)
+    )
+    # -----------------------------
 
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
