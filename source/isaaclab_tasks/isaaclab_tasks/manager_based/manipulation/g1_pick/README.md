@@ -135,3 +135,9 @@ tmux new -s g1_training,Create and enter the new session.
 tmux ls,List all currently running tmux sessions.
 tmux attach -t g1_training,Rejoin your running training session.
 tmux kill-session -t g1_training,Force quit the session and kill the training.
+
+While inside the tmux session, press this sequence:
+
+Press Ctrl + B (Release both keys).
+
+Press D (for Detach).
