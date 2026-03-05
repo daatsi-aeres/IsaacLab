@@ -92,6 +92,13 @@ G1_INSPIRE_CFG = ArticulationCfg(
             ".*_wrist_pitch_joint": -0.8,
             ".*_wrist_yaw_joint": 0.0,
             # ── Inspire hands: fully open ──────────────────────────────────────
+            # In init_state joint_pos
+            "right_thumb_1_joint": 0.5,   # midrange of 0 to 1.164
+            "right_thumb_2_joint": 0.25,  # midrange of 0 to 0.586
+            "right_index_1_joint": 0.6,   # midrange of 0 to 1.438
+            "right_middle_1_joint": 0.6,
+            "right_ring_1_joint": 0.6,
+            "right_little_1_joint": 0.6,
         },
         joint_vel={".*": 0.0},
     ),
@@ -142,8 +149,8 @@ G1_INSPIRE_CFG = ArticulationCfg(
                 ".*_wrist_yaw_joint",
             ],
             effort_limit_sim=80,
-            stiffness=80.0,
-            damping=10.0,
+            stiffness=40.0,
+            damping=20.0,
         ),
         # ── Inspire hands (controlled) ────────────────────────────────────────
         # All 12 joints per hand are in the actuator group.

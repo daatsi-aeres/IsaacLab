@@ -94,9 +94,6 @@ class SceneCfg(InteractiveSceneCfg):
 
 @configclass
 class ActionsCfg:
-    """Right arm (7 DOF) + right hand leader joints (6 DOF) = 13 DOF total.
-    Left arm is frozen via events — excluded from action space entirely.
-    """
     right_arm_action = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[
@@ -107,6 +104,13 @@ class ActionsCfg:
             "right_wrist_roll_joint",
             "right_wrist_pitch_joint",
             "right_wrist_yaw_joint",
+        ],
+        scale=0.2,
+        use_default_offset=True,
+    )
+    right_hand_action = mdp.JointPositionActionCfg(
+        asset_name="robot",
+        joint_names=[
             "right_thumb_1_joint",
             "right_thumb_2_joint",
             "right_index_1_joint",
@@ -114,7 +118,7 @@ class ActionsCfg:
             "right_ring_1_joint",
             "right_little_1_joint",
         ],
-        scale=0.5,
+        scale=0.1,   # smaller scale for fingers — tighter joint ranges
         use_default_offset=True,
     )
 
@@ -210,25 +214,25 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
-            "max_closure_dist": 0.05,
+            "max_closure_dist": 0.08,
         },
     )
 
-    object_displacement = RewTerm(
-    func=mdp.object_displacement_reward,
-    weight=5.0,
-    params={
-        "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-        "object_cfg": SceneEntityCfg("target_object"),
-        "gate_std": 0.13,
-    },
-    )
+    # object_displacement = RewTerm(
+    # func=mdp.object_displacement_reward,
+    # weight=5.0,
+    # params={
+    #     "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+    #     "object_cfg": SceneEntityCfg("target_object"),
+    #     "gate_std": 0.13,
+    # },
+    # )
 
     # Stage 3 — active upward motion, gated
     # Frozen hand earns zero — must actively lift
     upward_velocity = RewTerm(
         func=mdp.upward_velocity_reward,
-        weight=8.0,
+        weight=15.0,
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -314,7 +318,6 @@ class EventCfg:
     # Full scene reset
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
-    # Right arm: small random offset from default pose
     reset_right_arm = EventTerm(
         func=mdp.reset_joints_by_offset,
         mode="reset",
@@ -324,11 +327,22 @@ class EventCfg:
                 "right_shoulder_yaw_joint", "right_elbow_joint",
                 "right_wrist_roll_joint", "right_wrist_pitch_joint",
                 "right_wrist_yaw_joint",
+            ]),
+            "position_range": (-0.05, 0.05),
+            "velocity_range": (0.0, 0.0),
+        },
+    )
+
+    reset_right_hand = EventTerm(
+        func=mdp.reset_joints_by_offset,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[
                 "right_thumb_1_joint", "right_thumb_2_joint",
                 "right_index_1_joint", "right_middle_1_joint",
                 "right_ring_1_joint", "right_little_1_joint",
             ]),
-            "position_range": (-0.15, 0.15),
+            "position_range": (-0.05, 0.05),
             "velocity_range": (0.0, 0.0),
         },
     )
@@ -402,6 +416,22 @@ class TerminationsCfg:
         params={
             "minimum_height": _DROP_Z,
             "object_cfg": SceneEntityCfg("target_object"),
+        },
+    )
+
+    joint_limit = DoneTerm(
+        func=mdp.joint_pos_out_of_limit,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[
+                # Arm joints only — finger joints have lower=0 which random actions always violate
+                "right_shoulder_pitch_joint",
+                "right_shoulder_roll_joint",
+                "right_shoulder_yaw_joint",
+                "right_elbow_joint",
+                "right_wrist_roll_joint",
+                "right_wrist_pitch_joint",
+                "right_wrist_yaw_joint",
+            ]),
         },
     )
 
