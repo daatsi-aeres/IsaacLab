@@ -78,7 +78,7 @@ class SceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.4, 0.0, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.45, 0.05, _OBJ_INIT_Z]),
     )
 
     plane = AssetBaseCfg(
