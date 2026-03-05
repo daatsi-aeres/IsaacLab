@@ -38,7 +38,7 @@ _RIGHT_TIPS = [
 
 @configclass
 class SceneCfg(InteractiveSceneCfg):
-    replicate_physics: bool = False
+    replicate_physics: bool = True
 
     robot: ArticulationCfg = G1_INSPIRE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
@@ -204,7 +204,7 @@ class RewardsCfg:
     # Stage 1 — always active, no gate needed
     fingertip_proximity = RewTerm(
         func=mdp.fingertip_proximity_reward,
-        weight=1.0,
+        weight=1.5,
         params={
             "std": 0.10,
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
@@ -216,13 +216,13 @@ class RewardsCfg:
     # Without this gate the policy gets stuck forever in "touch but don't lift"
     lift = RewTerm(
         func=mdp.lift_reward,
-        weight=5.0,
+        weight=8.0,
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
             "resting_height": _OBJ_INIT_Z,
             "lift_scale": 0.04,   # saturates at 4 cm — steep gradient in early lift
-            "gate_std": 0.08,     # gate opens when mean tip dist < ~8 cm
+            "gate_std": 0.15,     # gate opens when mean tip dist < ~8 cm
         },
     )
 
@@ -235,7 +235,7 @@ class RewardsCfg:
             "object_cfg": SceneEntityCfg("target_object"),
             "target_height": _SUCCESS_Z + 0.03,
             "std": 0.05,
-            "gate_std": 0.08,
+            "gate_std": 0.12,
         },
     )
 
@@ -247,7 +247,7 @@ class RewardsCfg:
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
             "success_height": _SUCCESS_Z,
-            "gate_std": 0.08,
+            "gate_std": 0.12,
         },
     )
 
@@ -255,6 +255,16 @@ class RewardsCfg:
     action_smoothness = RewTerm(
         func=mdp.action_smoothness_penalty,
         weight=-0.002,
+    )
+
+    finger_closure = RewTerm(
+    func=mdp.finger_closure_reward,
+    weight=3.0,
+    params={
+        "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+        "object_cfg": SceneEntityCfg("target_object"),
+        "max_closure_dist": 0.08,
+    },
     )
 
 

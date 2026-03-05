@@ -111,3 +111,49 @@ def action_smoothness_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
     return torch.sum(
         torch.square(env.action_manager.action - env.action_manager.prev_action), dim=1
     ).clamp(0.0, 100.0)
+
+def finger_closure_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+    max_closure_dist: float = 0.08,
+) -> torch.Tensor:
+    """
+    Reward fingers for being on OPPOSITE SIDES of the cube.
+    This directly rewards grasp geometry rather than proximity.
+    
+    A hand hovering above the cube gets zero.
+    A hand wrapping around the cube gets high reward.
+    """
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+    
+    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids]  # (N, 5, 3)
+    obj_pos = obj.data.root_pos_w                           # (N, 3)
+    
+    # Vector from object to each fingertip
+    tip_vectors = tips_w - obj_pos.unsqueeze(1)             # (N, 5, 3)
+    
+    # Normalize to get directions
+    tip_dirs = torch.nn.functional.normalize(tip_vectors, dim=-1)  # (N, 5, 3)
+    
+    # For each pair of fingers, reward if they point in OPPOSITE directions
+    # (dot product negative = fingers on opposite sides of cube)
+    # Check thumb vs each other finger — most important opposition
+    thumb_dir = tip_dirs[:, 0, :]                          # (N, 3)
+    other_dirs = tip_dirs[:, 1:, :]                        # (N, 4, 3)
+    
+    # Dot product thumb vs each finger: -1 = perfect opposition, +1 = same side
+    dots = (thumb_dir.unsqueeze(1) * other_dirs).sum(dim=-1)  # (N, 4)
+    
+    # Reward opposition: map [-1, 1] → [1, 0]
+    opposition = (1.0 - dots) / 2.0                        # (N, 4), 1=opposite, 0=same
+    
+    # Only count opposition when fingers are actually close to cube
+    dists = torch.norm(tips_w - obj_pos.unsqueeze(1), dim=-1)  # (N, 5)
+    close_enough = (dists < max_closure_dist).float()
+    thumb_close = close_enough[:, 0:1]                     # (N, 1)
+    others_close = close_enough[:, 1:]                     # (N, 4)
+    proximity_gate = thumb_close * others_close            # (N, 4)
+    
+    return (opposition * proximity_gate).mean(dim=-1)      # (N,)
