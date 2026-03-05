@@ -1,5 +1,3 @@
-# rewards.py  — fresh, right-arm-only, no contact sensors
-
 from __future__ import annotations
 import torch
 from typing import TYPE_CHECKING
@@ -16,18 +14,38 @@ def fingertip_proximity_reward(
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
 ) -> torch.Tensor:
-    """
-    Stage 1: Pull ALL right fingertips toward the cube.
-    Uses MEAN across tips (not min) — forces full encirclement, not one-finger poke.
-    Returns values in [0, 1].
-    """
     robot: Articulation = env.scene[robot_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
+    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids]
+    obj_pos = obj.data.root_pos_w.unsqueeze(1)
+    dists = torch.norm(tips_w - obj_pos, dim=-1)
+    return (1.0 - torch.tanh(dists / std)).mean(dim=-1)
 
-    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids]       # (N, 5, 3)
-    obj_pos = obj.data.root_pos_w.unsqueeze(1)                   # (N, 1, 3)
-    dists = torch.norm(tips_w - obj_pos, dim=-1)                 # (N, 5)
-    return (1.0 - torch.tanh(dists / std)).mean(dim=-1)          # (N,)
+
+def finger_closure_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+    max_closure_dist: float = 0.08,
+) -> torch.Tensor:
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids]
+    obj_pos = obj.data.root_pos_w
+
+    tip_vectors = tips_w - obj_pos.unsqueeze(1)
+    tip_dirs = torch.nn.functional.normalize(tip_vectors, dim=-1)
+
+    thumb_dir = tip_dirs[:, 0, :]
+    other_dirs = tip_dirs[:, 1:, :]
+    dots = (thumb_dir.unsqueeze(1) * other_dirs).sum(dim=-1)
+    opposition = (1.0 - dots) / 2.0
+
+    dists = torch.norm(tips_w - obj_pos.unsqueeze(1), dim=-1)
+    close_enough = (dists < max_closure_dist).float()
+    proximity_gate = close_enough[:, 0:1] * close_enough[:, 1:]
+
+    return (opposition * proximity_gate).mean(dim=-1)
 
 
 def _get_proximity_gate(env, robot_cfg, object_cfg, gate_std):
@@ -40,31 +58,41 @@ def _get_proximity_gate(env, robot_cfg, object_cfg, gate_std):
     return torch.sigmoid((mean_prox - 0.5) * 10.0)
 
 
-def lift_reward(
+def upward_velocity_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
-    resting_height: float = 0.850,
-    lift_scale: float = 0.05,
-    gate_std: float = 0.08,
+    gate_std: float = 0.13,
 ) -> torch.Tensor:
-    """
-    Stage 2: Reward the cube rising — BUT ONLY when fingers are in a grasp posture.
-    This is the critical gap-filler. The gate ensures the policy can't get lift
-    reward by hitting the cube upward with one finger.
+    """Reward cube moving upward RIGHT NOW — frozen hand earns zero."""
+    obj: RigidObject = env.scene[object_cfg.name]
+    upward_vel = obj.data.root_lin_vel_w[:, 2].clamp(0.0, 2.0)
+    gate = _get_proximity_gate(env, robot_cfg, object_cfg, gate_std)
+    return gate * upward_vel
 
-    reward = gate(fingertip_proximity) * clamp((z - resting_height) / lift_scale, 0, 1)
 
-    With lift_scale=0.05, the reward saturates at 5 cm of lift. This keeps the
-    gradient steep early on (every mm of lift matters) rather than using tanh
-    which is too flat near zero.
-    """
+def height_progress_reward(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+    resting_height: float = 0.850,
+) -> torch.Tensor:
+    """Reward making NEW height progress this episode — freezing earns zero."""
     obj: RigidObject = env.scene[object_cfg.name]
     obj_z = obj.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
-    lift = ((obj_z - resting_height) / lift_scale).clamp(0.0, 1.0)
 
-    gate = _get_proximity_gate(env, robot_cfg, object_cfg, gate_std)
-    return gate * lift
+    if not hasattr(env, "_max_cube_height"):
+        env._max_cube_height = torch.full(
+            (env.num_envs,), resting_height, device=env.device
+        )
+
+    progress = (obj_z - env._max_cube_height).clamp(0.0, 1.0)
+    env._max_cube_height = torch.max(env._max_cube_height, obj_z)
+
+    reset_ids = (env.episode_length_buf == 1).nonzero(as_tuple=False).flatten()
+    if len(reset_ids) > 0:
+        env._max_cube_height[reset_ids] = resting_height
+
+    return progress
 
 
 def hold_height_reward(
@@ -72,88 +100,62 @@ def hold_height_reward(
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
     target_height: float = 0.950,
+    min_height: float = 0.870,   # must be above this before hold reward activates
     std: float = 0.05,
-    gate_std: float = 0.08,
+    gate_std: float = 0.13,
 ) -> torch.Tensor:
-    """
-    Stage 3: Reward holding the cube near a target height.
-    Also gated — no free reward for cube sitting on table near target z.
-    """
     obj: RigidObject = env.scene[object_cfg.name]
     obj_z = obj.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
-    height_reward = 1.0 - torch.tanh(torch.abs(obj_z - target_height) / std)
-
+    
+    # Zero reward below min_height — resting position gets nothing
+    above_threshold = (obj_z > min_height).float()
+    height_reward = (1.0 - torch.tanh(torch.abs(obj_z - target_height) / std))
     gate = _get_proximity_gate(env, robot_cfg, object_cfg, gate_std)
-    return gate * height_reward
+    return gate * height_reward * above_threshold
 
 
 def success_bonus(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
-    success_height: float = 0.920,
-    gate_std: float = 0.08,
+    success_height: float = 0.880,
+    gate_std: float = 0.13,
 ) -> torch.Tensor:
-    """
-    Sparse +1 when cube is above success_height AND fingers are in grasp posture.
-    Kept small (weight=5) — the dense lift_reward does the heavy lifting.
-    """
     obj: RigidObject = env.scene[object_cfg.name]
     obj_z = obj.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
     is_lifted = (obj_z > success_height).float()
-
     gate = _get_proximity_gate(env, robot_cfg, object_cfg, gate_std)
     return gate * is_lifted
 
 
+def joint_velocity_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    scale: float = 0.01,
+) -> torch.Tensor:
+    """Small reward for joint movement — prevents policy freezing."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    joint_vel = robot.data.joint_vel[:, robot_cfg.joint_ids]
+    return torch.norm(joint_vel, dim=-1).clamp(0.0, 5.0) * scale
+
+
 def action_smoothness_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Penalise jerky actions. Small weight — don't let this dominate."""
     return torch.sum(
         torch.square(env.action_manager.action - env.action_manager.prev_action), dim=1
     ).clamp(0.0, 100.0)
 
-def finger_closure_reward(
+def object_displacement_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
-    max_closure_dist: float = 0.08,
+    gate_std: float = 0.13,
 ) -> torch.Tensor:
     """
-    Reward fingers for being on OPPOSITE SIDES of the cube.
-    This directly rewards grasp geometry rather than proximity.
-    
-    A hand hovering above the cube gets zero.
-    A hand wrapping around the cube gets high reward.
+    Reward ANY movement of the cube when fingers are close.
+    This acts as a contact proxy — if the cube moves, fingers are touching it.
+    Direction doesn't matter yet — just make contact and disturb the cube.
     """
-    robot: Articulation = env.scene[robot_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
-    
-    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids]  # (N, 5, 3)
-    obj_pos = obj.data.root_pos_w                           # (N, 3)
-    
-    # Vector from object to each fingertip
-    tip_vectors = tips_w - obj_pos.unsqueeze(1)             # (N, 5, 3)
-    
-    # Normalize to get directions
-    tip_dirs = torch.nn.functional.normalize(tip_vectors, dim=-1)  # (N, 5, 3)
-    
-    # For each pair of fingers, reward if they point in OPPOSITE directions
-    # (dot product negative = fingers on opposite sides of cube)
-    # Check thumb vs each other finger — most important opposition
-    thumb_dir = tip_dirs[:, 0, :]                          # (N, 3)
-    other_dirs = tip_dirs[:, 1:, :]                        # (N, 4, 3)
-    
-    # Dot product thumb vs each finger: -1 = perfect opposition, +1 = same side
-    dots = (thumb_dir.unsqueeze(1) * other_dirs).sum(dim=-1)  # (N, 4)
-    
-    # Reward opposition: map [-1, 1] → [1, 0]
-    opposition = (1.0 - dots) / 2.0                        # (N, 4), 1=opposite, 0=same
-    
-    # Only count opposition when fingers are actually close to cube
-    dists = torch.norm(tips_w - obj_pos.unsqueeze(1), dim=-1)  # (N, 5)
-    close_enough = (dists < max_closure_dist).float()
-    thumb_close = close_enough[:, 0:1]                     # (N, 1)
-    others_close = close_enough[:, 1:]                     # (N, 4)
-    proximity_gate = thumb_close * others_close            # (N, 4)
-    
-    return (opposition * proximity_gate).mean(dim=-1)      # (N,)
+    speed = torch.norm(obj.data.root_lin_vel_w, dim=-1)
+    gate = _get_proximity_gate(env, robot_cfg, object_cfg, gate_std)
+    return gate * speed.clamp(0.0, 1.0)

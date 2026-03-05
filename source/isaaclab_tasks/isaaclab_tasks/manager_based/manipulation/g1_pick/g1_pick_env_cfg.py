@@ -191,42 +191,61 @@ class ObservationsCfg:
 
 @configclass
 class RewardsCfg:
-    """
-    Three-stage causal chain — each stage builds on the previous:
 
-    Stage 1 (always): fingers → cube         weight 1.0  [0, 1]
-    Stage 2 (gated):  grasping ∧ cube rises  weight 5.0  [0, 1]
-    Stage 3 (gated):  cube held at height    weight 3.0  [0, 1]
-    Bonus  (sparse):  cube above threshold   weight 5.0  {0, 1}
-    Penalty:          action jerk            weight -0.002
-    """
-
-    # Stage 1 — always active, no gate needed
+    # Stage 1 — approach
     fingertip_proximity = RewTerm(
         func=mdp.fingertip_proximity_reward,
         weight=1.5,
         params={
-            "std": 0.10,
+            "std": 0.2,
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
         },
     )
 
-    # Stage 2 — THE KEY TERM: lift reward gated by grasp posture
-    # Without this gate the policy gets stuck forever in "touch but don't lift"
-    lift = RewTerm(
-        func=mdp.lift_reward,
+    # Stage 2 — grasp geometry
+    finger_closure = RewTerm(
+        func=mdp.finger_closure_reward,
+        weight=3.0,
+        params={
+            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+            "object_cfg": SceneEntityCfg("target_object"),
+            "max_closure_dist": 0.05,
+        },
+    )
+
+    object_displacement = RewTerm(
+    func=mdp.object_displacement_reward,
+    weight=5.0,
+    params={
+        "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+        "object_cfg": SceneEntityCfg("target_object"),
+        "gate_std": 0.13,
+    },
+    )
+
+    # Stage 3 — active upward motion, gated
+    # Frozen hand earns zero — must actively lift
+    upward_velocity = RewTerm(
+        func=mdp.upward_velocity_reward,
         weight=8.0,
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
-            "resting_height": _OBJ_INIT_Z,
-            "lift_scale": 0.04,   # saturates at 4 cm — steep gradient in early lift
-            "gate_std": 0.15,     # gate opens when mean tip dist < ~8 cm
+            "gate_std": 0.13,
         },
     )
 
-    # Stage 3 — hold at target height, also gated
+    # Stage 4 — new height progress, freezing earns zero
+    height_progress = RewTerm(
+        func=mdp.height_progress_reward,
+        weight=50.0,
+        params={
+            "object_cfg": SceneEntityCfg("target_object"),
+            "resting_height": _OBJ_INIT_Z,
+        },
+    )
+
     hold_height = RewTerm(
         func=mdp.hold_height_reward,
         weight=3.0,
@@ -234,38 +253,60 @@ class RewardsCfg:
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
             "target_height": _SUCCESS_Z + 0.03,
+            "min_height": 0.870,   # 20mm above resting — must lift before hold reward
             "std": 0.05,
-            "gate_std": 0.12,
+            "gate_std": 0.13,
         },
     )
 
-    # Sparse bonus
+    # Sparse success bonus — lowered threshold to 30mm above resting
     success = RewTerm(
         func=mdp.success_bonus,
-        weight=5.0,
+        weight=10.0,
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
-            "success_height": _SUCCESS_Z,
-            "gate_std": 0.12,
+            "success_height": 0.880,
+            "gate_std": 0.13,
         },
     )
 
-    # Smoothness penalty — very small, don't let it interfere with exploration
+    # Anti-freeze — small reward for any joint movement
+    keep_moving = RewTerm(
+        func=mdp.joint_velocity_reward,
+        weight=0.1,
+        params={
+            "robot_cfg": SceneEntityCfg("robot", joint_names=[
+                "right_shoulder_pitch_joint",
+                "right_shoulder_roll_joint",
+                "right_shoulder_yaw_joint",
+                "right_elbow_joint",
+                "right_wrist_roll_joint",
+                "right_wrist_pitch_joint",
+                "right_wrist_yaw_joint",
+                "right_thumb_1_joint",
+                "right_thumb_2_joint",
+                "right_index_1_joint",
+                "right_middle_1_joint",
+                "right_ring_1_joint",
+                "right_little_1_joint",
+            ]),
+        },
+    )
+
+    # Drop penalty — safe now, policy won't freeze to avoid it
+    early_termination = RewTerm(
+        func=mdp.is_terminated_term,
+        weight=-3.0,
+        params={"term_keys": "target_dropped"},
+    )
+
     action_smoothness = RewTerm(
         func=mdp.action_smoothness_penalty,
         weight=-0.002,
     )
 
-    finger_closure = RewTerm(
-    func=mdp.finger_closure_reward,
-    weight=3.0,
-    params={
-        "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-        "object_cfg": SceneEntityCfg("target_object"),
-        "max_closure_dist": 0.08,
-    },
-    )
+    
 
 
 @configclass
