@@ -91,3 +91,39 @@ def target_object_id(
     else:
         # Return zeros if not available (during initialization)
         return torch.zeros(env.num_envs, 10, device=env.device)
+
+def object_root_velocity(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+) -> torch.Tensor:
+    """Object linear + angular velocity in world frame. Shape: (N, 6)."""
+    obj: RigidObject = env.scene[object_cfg.name]
+    return torch.cat([obj.data.root_lin_vel_w, obj.data.root_ang_vel_w], dim=-1)
+
+
+def fingertip_to_object_vectors(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+) -> torch.Tensor:
+    """
+    Per-fingertip delta vectors pointing from each tip to the cube centre,
+    expressed in robot root frame. Shape: (N, num_tips * 3).
+
+    This is the single most informative grasp observation — the policy can
+    directly read which direction each finger needs to move.
+    """
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+
+    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids]   # (N, 5, 3)
+    obj_pos_w = obj.data.root_pos_w.unsqueeze(1)            # (N, 1, 3)
+    delta_w = obj_pos_w - tips_w                            # (N, 5, 3) tip→cube
+
+    # Transform to robot base frame
+    root_quat = robot.data.root_quat_w.unsqueeze(1).expand(-1, tips_w.shape[1], -1)
+    delta_b = quat_apply_inverse(
+        root_quat.reshape(-1, 4),
+        delta_w.reshape(-1, 3),
+    )
+    return delta_b.view(env.num_envs, -1)

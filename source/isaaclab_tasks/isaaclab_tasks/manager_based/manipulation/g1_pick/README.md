@@ -114,7 +114,7 @@ g1_pick/
 
 ...
 
-./isaaclab.sh -p scripts/reinforcement_learning/rl_games/train.py \
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
   --task Isaac-G1-Pick-v0 \
   --headless \
   --num_envs 1024 \
