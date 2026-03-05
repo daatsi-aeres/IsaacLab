@@ -431,7 +431,7 @@ class RewardsCfg:
         func=mdp.target_object_lift_reward,
         params={
             "minimal_height": _OBJ_INIT_Z,   # 0.850 m — object resting height
-            "scale": 0.03,
+            "scale": 0.02,
             "object_cfg": SceneEntityCfg("target_object"),
         },
         weight=10.0,
@@ -448,7 +448,7 @@ class RewardsCfg:
                 ],
             ),
             "object_cfg": SceneEntityCfg("target_object"),
-            "proximity_std": 0.02,
+            "proximity_std": 0.1,
         },
         weight=5.0,
     )
@@ -562,14 +562,11 @@ class G1PickEnvCfg(ManagerBasedRLEnvCfg):
 
     scene: G1PickSceneCfg = G1PickSceneCfg(num_envs=4096, env_spacing=3.0)
 
-    # --- ADD THIS VIEWER BLOCK ---
     viewer: ViewerCfg = ViewerCfg(
-        resolution=(640, 480),
-        eye=(1.5, 0.0, 1.0),
-        lookat=(0.0, 0.0, 0.5)
+        resolution=(800, 600),
+        eye=(12.0, -4.0, 2.5),         # 4m forward, 4m right, elevated
+        lookat=(8.0, 0.0, 0.85)        # focus near table height
     )
-    # -----------------------------
-
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     rewards: RewardsCfg = RewardsCfg()

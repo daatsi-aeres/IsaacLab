@@ -71,22 +71,24 @@ def target_object_grasping_reward(
     num_contacts = (forces > threshold).sum(dim=-1)          # (N,)
     return (num_contacts >= min_contacts).float()
 
-def finger_grip_reward(env, robot_cfg, object_cfg, proximity_std=0.02):
+def finger_grip_reward(env, robot_cfg, object_cfg, proximity_std=0.1):
     robot = env.scene[robot_cfg.name]
     target = env.scene[object_cfg.name]
 
-    fingertip_pos_w = robot.data.body_pos_w[:, robot_cfg.body_ids]   # (N, n_fingers, 3)
-    object_pos_w = target.data.root_pos_w.unsqueeze(1)               # (N,1,3)
-    dists = torch.norm(fingertip_pos_w - object_pos_w, dim=-1)      # (N, n_fingers)
-    # reward is high when fingers are near object
-    reward = torch.exp(-dists / proximity_std).prod(dim=-1)          # (N,)
-    return reward.clamp(0.0, 1.0)
+    fingertip_pos_w = robot.data.body_pos_w[:, robot_cfg.body_ids]
+    object_pos_w = target.data.root_pos_w.unsqueeze(1)
+
+    dists = torch.norm(fingertip_pos_w - object_pos_w, dim=-1)
+
+    reward = torch.exp(-dists / proximity_std).mean(dim=-1)
+
+    return reward
 
 def target_object_lift_reward(
     env: ManagerBasedRLEnv,
     minimal_height: float,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
-    scale: float = 0.08,
+    scale: float = 0.02,
     robot_cfg: SceneEntityCfg | None = None,
     proximity_std: float | None = None,
 ) -> torch.Tensor:
@@ -118,7 +120,7 @@ def target_object_lift_reward(
         object_pos_w = target_object.data.root_pos_w.unsqueeze(1)             # (N, 1, 3)
         min_dist = torch.norm(fingertip_pos_w - object_pos_w, dim=-1).min(dim=-1).values
         proximity = 1.0 - torch.tanh(min_dist / proximity_std)               # (N,)
-        return lift * proximity
+        return lift * proximity*10.0  # Scale up to make it more competitive with the 10.0 success bonus.
 
     return lift
 
