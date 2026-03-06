@@ -218,6 +218,16 @@ class RewardsCfg:
         },
     )
 
+    lift_height = RewTerm(
+        func=mdp.lift_height_reward,
+        weight=20.0,
+        params={
+            "object_cfg": SceneEntityCfg("target_object"),
+            "resting_height": _OBJ_INIT_Z,
+            "max_height": _SUCCESS_Z,
+        },
+    )
+
     # object_displacement = RewTerm(
     # func=mdp.object_displacement_reward,
     # weight=5.0,
@@ -309,6 +319,28 @@ class RewardsCfg:
         func=mdp.action_smoothness_penalty,
         weight=-0.002,
     )
+    # Keep the termination but add a soft penalty too
+    joint_limit_penalty = RewTerm(
+    func=mdp.joint_pos_limit_penalty,
+    weight=-0.5,
+    params={
+        "asset_cfg": SceneEntityCfg("robot", joint_names=[
+            "right_shoulder_pitch_joint",
+            "right_shoulder_roll_joint",
+            "right_shoulder_yaw_joint",
+            "right_elbow_joint",
+            "right_wrist_roll_joint",
+            "right_wrist_pitch_joint",
+            "right_wrist_yaw_joint",
+            "right_thumb_1_joint",
+            "right_thumb_2_joint",
+            "right_index_1_joint",
+            "right_middle_1_joint",
+            "right_ring_1_joint",
+            "right_little_1_joint",
+        ]),
+    },
+)
 
     
 

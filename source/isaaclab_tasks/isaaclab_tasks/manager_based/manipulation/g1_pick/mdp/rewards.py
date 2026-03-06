@@ -144,6 +144,22 @@ def action_smoothness_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
         torch.square(env.action_manager.action - env.action_manager.prev_action), dim=1
     ).clamp(0.0, 100.0)
 
+def joint_pos_limit_penalty(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    robot: Articulation = env.scene[asset_cfg.name]
+    joint_pos = robot.data.joint_pos[:, asset_cfg.joint_ids]
+    limits = robot.data.soft_joint_pos_limits[:, asset_cfg.joint_ids]
+    
+    lower_violation = (limits[..., 0] - joint_pos).clamp(0.0, 1.0)
+    upper_violation = (joint_pos - limits[..., 1]).clamp(0.0, 1.0)
+    
+    total_violation = (lower_violation + upper_violation).sum(dim=-1)
+    
+    # Scale up so small violations are still meaningful
+    return (total_violation)
+
 def object_displacement_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
@@ -159,3 +175,19 @@ def object_displacement_reward(
     speed = torch.norm(obj.data.root_lin_vel_w, dim=-1)
     gate = _get_proximity_gate(env, robot_cfg, object_cfg, gate_std)
     return gate * speed.clamp(0.0, 1.0)
+
+def lift_height_reward(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+    resting_height: float = 0.850,
+    max_height: float = 0.950,
+) -> torch.Tensor:
+    """Reward proportional to how high cube is above resting — every timestep."""
+    obj: RigidObject = env.scene[object_cfg.name]
+    obj_z = obj.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
+    
+    # Normalize height above resting to [0, 1]
+    height_above_resting = (obj_z - resting_height).clamp(0.0, max_height - resting_height)
+    normalized = height_above_resting / (max_height - resting_height)
+    
+    return normalized
