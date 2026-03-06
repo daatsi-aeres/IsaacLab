@@ -27,6 +27,7 @@ def finger_closure_reward(
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
     max_closure_dist: float = 0.08,
+    min_cube_speed: float = 0.002,  # cube must be moving to get closure reward
 ) -> torch.Tensor:
     robot: Articulation = env.scene[robot_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
@@ -45,7 +46,11 @@ def finger_closure_reward(
     close_enough = (dists < max_closure_dist).float()
     proximity_gate = close_enough[:, 0:1] * close_enough[:, 1:]
 
-    return (opposition * proximity_gate).mean(dim=-1)
+    # Gate on cube actually moving — pinching air produces no cube movement
+    cube_speed = torch.norm(obj.data.root_lin_vel_w, dim=-1)
+    contact_gate = (cube_speed > min_cube_speed).float()
+
+    return (opposition * proximity_gate).mean(dim=-1) * contact_gate
 
 
 def _get_proximity_gate(env, robot_cfg, object_cfg, gate_std):
@@ -72,20 +77,18 @@ def upward_velocity_reward(
 
 
 def height_progress_reward(
-    env: ManagerBasedRLEnv,
-    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
-    resting_height: float = 0.850,
+    env, object_cfg=SceneEntityCfg("target_object"),
+    resting_height=0.850,
+    min_progress_threshold=0.005,  # ignore sub-5mm progress — filters physics jitter
 ) -> torch.Tensor:
-    """Reward making NEW height progress this episode — freezing earns zero."""
-    obj: RigidObject = env.scene[object_cfg.name]
+    obj = env.scene[object_cfg.name]
     obj_z = obj.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
 
     if not hasattr(env, "_max_cube_height"):
-        env._max_cube_height = torch.full(
-            (env.num_envs,), resting_height, device=env.device
-        )
+        env._max_cube_height = torch.full((env.num_envs,), resting_height, device=env.device)
 
-    progress = (obj_z - env._max_cube_height).clamp(0.0, 1.0)
+    raw_progress = (obj_z - env._max_cube_height).clamp(0.0, 1.0)
+    progress = (raw_progress - min_progress_threshold).clamp(0.0, 1.0)
     env._max_cube_height = torch.max(env._max_cube_height, obj_z)
 
     reset_ids = (env.episode_length_buf == 1).nonzero(as_tuple=False).flatten()
@@ -191,3 +194,32 @@ def lift_height_reward(
     normalized = height_above_resting / (max_height - resting_height)
     
     return normalized
+
+def contact_detection_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+    contact_dist: float = 0.04,  # fingers within 4cm = likely touching
+    min_speed: float = 0.002,
+) -> torch.Tensor:
+    """
+    Reward any cube movement when fingers are very close.
+    Contact proxy — if cube moves while fingers are at surface distance, 
+    fingers are touching it.
+    Direction doesn't matter yet — just make contact.
+    """
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+    
+    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids]
+    obj_pos = obj.data.root_pos_w
+    
+    # At least one finger must be within contact distance
+    dists = torch.norm(tips_w - obj_pos.unsqueeze(1), dim=-1)  # (N, 5)
+    min_dist = dists.min(dim=-1).values  # closest finger
+    contact_gate = (min_dist < contact_dist).float()
+    
+    # Cube moving in any direction
+    cube_speed = torch.norm(obj.data.root_lin_vel_w, dim=-1).clamp(0.0, 1.0)
+    
+    return contact_gate * cube_speed

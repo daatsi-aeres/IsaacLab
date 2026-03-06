@@ -22,7 +22,7 @@ from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 from .robot_cfg import G1_INSPIRE_CFG
 from . import mdp
 
-_OBJ_INIT_Z   = 0.850   # cube resting on tray (tray top ~0.820 + half-cube 0.025 + gap)
+_OBJ_INIT_Z   = 0.852   # cube resting on tray (tray top ~0.820 + half-cube 0.025 + gap)
 _SUCCESS_Z    = 0.920   # 7 cm above resting = meaningful lift
 _DROP_Z       = 0.600   # below this → fell off table → terminate
 
@@ -105,7 +105,7 @@ class ActionsCfg:
             "right_wrist_pitch_joint",
             "right_wrist_yaw_joint",
         ],
-        scale=0.2,
+        scale=0.25,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
@@ -176,13 +176,13 @@ class ObservationsCfg:
 
         # # Fingertip-to-object delta vectors — most direct grasp signal
         # # shape: (N, 5*3=15)  each vector points from tip to cube centre
-        # fingertip_to_object = ObsTerm(
-        #     func=mdp.fingertip_to_object_vectors,  # see obs.py below
-        #     params={
-        #         "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-        #         "object_cfg": SceneEntityCfg("target_object"),
-        #     },
-        # )
+        fingertip_to_object = ObsTerm(
+            func=mdp.fingertip_to_object_vectors,  # see obs.py below
+            params={
+                "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+                "object_cfg": SceneEntityCfg("target_object"),
+            },
+        )
 
         actions = ObsTerm(func=mdp.last_action)
 
@@ -207,10 +207,22 @@ class RewardsCfg:
         },
     )
 
+    contact_detection = RewTerm(
+    func=mdp.contact_detection_reward,
+    weight=3.0,
+    params={
+        "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+        "object_cfg": SceneEntityCfg("target_object"),
+        "contact_dist": 0.04,
+        "min_speed": 0.002,
+    },
+    )
+
+
     # Stage 2 — grasp geometry
     finger_closure = RewTerm(
         func=mdp.finger_closure_reward,
-        weight=3.0,
+        weight=8.0,
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -242,7 +254,7 @@ class RewardsCfg:
     # Frozen hand earns zero — must actively lift
     upward_velocity = RewTerm(
         func=mdp.upward_velocity_reward,
-        weight=15.0,
+        weight=5.0,
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -322,7 +334,7 @@ class RewardsCfg:
     # Keep the termination but add a soft penalty too
     joint_limit_penalty = RewTerm(
     func=mdp.joint_pos_limit_penalty,
-    weight=-0.5,
+    weight=-2.0,
     params={
         "asset_cfg": SceneEntityCfg("robot", joint_names=[
             "right_shoulder_pitch_joint",
@@ -483,7 +495,7 @@ class G1RightArmLiftEnvCfg(ManagerBasedRLEnvCfg):
     events: EventCfg = EventCfg()
 
     def __post_init__(self):
-        self.decimation = 2
+        self.decimation = 4
         self.episode_length_s = 8.0
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
