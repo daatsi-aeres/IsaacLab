@@ -201,7 +201,7 @@ class RewardsCfg:
         func=mdp.fingertip_proximity_reward,
         weight=1.5,
         params={
-            "std": 0.2,
+            "std": 0.08,
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
         },
@@ -214,7 +214,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
-            "max_closure_dist": 0.08,
+            "max_closure_dist": 0.1 ,
         },
     )
 
