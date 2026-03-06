@@ -75,7 +75,7 @@ class SceneCfg(InteractiveSceneCfg):
                 solver_velocity_iteration_count=1,
                 disable_gravity=False,
             ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.45, 0.05, _OBJ_INIT_Z]),
