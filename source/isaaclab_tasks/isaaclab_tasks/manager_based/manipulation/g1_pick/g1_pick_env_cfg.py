@@ -105,7 +105,7 @@ class ActionsCfg:
             "right_wrist_pitch_joint",
             "right_wrist_yaw_joint",
         ],
-        scale=0.25,
+        scale=0.15,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
@@ -213,7 +213,7 @@ class RewardsCfg:
     params={
         "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
         "object_cfg": SceneEntityCfg("target_object"),
-        "contact_dist": 0.04,
+        "contact_dist": 0.07, # distance threshold for contact reward
         "min_speed": 0.002,
     },
     )
