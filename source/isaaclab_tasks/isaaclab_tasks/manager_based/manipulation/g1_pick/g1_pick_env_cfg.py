@@ -208,14 +208,13 @@ class RewardsCfg:
     )
 
     contact_detection = RewTerm(
-    func=mdp.contact_detection_reward,
-    weight=3.0,
-    params={
-        "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-        "object_cfg": SceneEntityCfg("target_object"),
-        "contact_dist": 0.07, # distance threshold for contact reward
-        "min_speed": 0.002,
-    },
+        func=mdp.contact_detection_reward,
+        weight=3.0,
+        params={
+            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+            "object_cfg": SceneEntityCfg("target_object"),
+            # contact_dist removed — no longer needed
+        },
     )
 
 

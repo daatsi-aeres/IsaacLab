@@ -199,14 +199,12 @@ def contact_detection_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
-    contact_dist: float = 0.04,  # fingers within 4cm = likely touching
-    min_speed: float = 0.002,
+    contact_dist: float = 0.07,
 ) -> torch.Tensor:
     """
-    Reward any cube movement when fingers are very close.
-    Contact proxy — if cube moves while fingers are at surface distance, 
-    fingers are touching it.
-    Direction doesn't matter yet — just make contact.
+    Smooth contact reward — exponential proximity weight × cube speed.
+    Closer finger + moving cube = higher reward.
+    No cliff edge, continuous gradient from any distance down to contact.
     """
     robot: Articulation = env.scene[robot_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
@@ -214,12 +212,14 @@ def contact_detection_reward(
     tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids]
     obj_pos = obj.data.root_pos_w
     
-    # At least one finger must be within contact distance
     dists = torch.norm(tips_w - obj_pos.unsqueeze(1), dim=-1)  # (N, 5)
-    min_dist = dists.min(dim=-1).values  # closest finger
-    contact_gate = (min_dist < contact_dist).float()
+    min_dist = dists.min(dim=-1).values  # closest finger distance to cube center
     
-    # Cube moving in any direction
+    # Smooth exponential proximity — peaks at 1.0 when finger at cube center
+    # std=0.05 means at 5cm distance reward is ~0.37, at 2.5cm (surface) ~0.61
+    proximity_weight = torch.exp(-min_dist / 0.05)
+    
+    # Cube moving in any direction — real contact signal
     cube_speed = torch.norm(obj.data.root_lin_vel_w, dim=-1).clamp(0.0, 1.0)
     
-    return contact_gate * cube_speed
+    return proximity_weight * cube_speed
