@@ -105,7 +105,7 @@ class ActionsCfg:
             "right_wrist_pitch_joint",
             "right_wrist_yaw_joint",
         ],
-        scale=0.15,
+        scale=0.2,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
@@ -118,7 +118,7 @@ class ActionsCfg:
             "right_ring_1_joint",
             "right_little_1_joint",
         ],
-        scale=0.1,   # smaller scale for fingers — tighter joint ranges
+        scale=0.15,   # smaller scale for fingers — tighter joint ranges
         use_default_offset=True,
     )
 
@@ -202,6 +202,16 @@ class RewardsCfg:
         weight=1.5,
         params={
             "std": 0.08,
+            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+            "object_cfg": SceneEntityCfg("target_object"),
+        },
+    )
+
+    # NEW: Dense reward for moving tips directly toward the cube
+    approach_velocity = RewTerm(
+        func=mdp.approach_velocity_reward,
+        weight=5.0, 
+        params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
         },

@@ -22,12 +22,12 @@ def fingertip_proximity_reward(
     return (1.0 - torch.tanh(dists / std)).mean(dim=-1)
 
 
+# In rewards.py
 def finger_closure_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
     max_closure_dist: float = 0.08,
-    min_cube_speed: float = 0.002,  # cube must be moving to get closure reward
 ) -> torch.Tensor:
     robot: Articulation = env.scene[robot_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
@@ -46,12 +46,30 @@ def finger_closure_reward(
     close_enough = (dists < max_closure_dist).float()
     proximity_gate = close_enough[:, 0:1] * close_enough[:, 1:]
 
-    # Gate on cube actually moving — pinching air produces no cube movement
-    cube_speed = torch.norm(obj.data.root_lin_vel_w, dim=-1)
-    contact_gate = (cube_speed > min_cube_speed).float()
+    # REMOVED the cube speed gate. Just reward the geometry!
+    return (opposition * proximity_gate).mean(dim=-1)
 
-    return (opposition * proximity_gate).mean(dim=-1) * contact_gate
-
+def approach_velocity_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+) -> torch.Tensor:
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+    
+    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids] # (N, 5, 3)
+    tips_vel_w = robot.data.body_lin_vel_w[:, robot_cfg.body_ids] # (N, 5, 3)
+    obj_pos = obj.data.root_pos_w.unsqueeze(1) # (N, 1, 3)
+    
+    # Vector from tip to object
+    to_obj = obj_pos - tips_w
+    to_obj_dir = torch.nn.functional.normalize(to_obj, dim=-1)
+    
+    # Dot product of tip velocity and direction to object
+    approach_vel = (tips_vel_w * to_obj_dir).sum(dim=-1)
+    
+    # We only care about positive approach velocity, not moving away
+    return approach_vel.clamp(min=0.0).mean(dim=-1)
 
 def _get_proximity_gate(env, robot_cfg, object_cfg, gate_std):
     robot: Articulation = env.scene[robot_cfg.name]
