@@ -15,7 +15,7 @@ class G1PickPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 150
     experiment_name = "g1_pick"
     policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
+        init_noise_std=0.5,
         actor_obs_normalization=True,
         critic_obs_normalization=True,
         actor_hidden_dims=[512, 256, 128],  # correct for 63-dim obs

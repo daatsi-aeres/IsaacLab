@@ -212,7 +212,7 @@ class RewardsCfg:
 
     approach_velocity = RewTerm(
         func=mdp.approach_velocity_reward,
-        weight=5.0,  # Higher than proximity so it actively moves, doesn't just sit
+        weight=3.0,  # Higher than proximity so it actively moves, doesn't just sit
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -225,7 +225,7 @@ class RewardsCfg:
     # ==========================================
     finger_closure = RewTerm(
         func=mdp.finger_closure_reward,
-        weight=8.0,  # Curling fingers is good...
+        weight=5.0,  # Curling fingers is good...
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -233,14 +233,14 @@ class RewardsCfg:
         },
     )
 
-    contact_detection = RewTerm(
-        func=mdp.contact_detection_reward,
-        weight=15.0, # ...but actually touching the cube is TWICE as good!
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-        },
-    )
+    # contact_detection = RewTerm(
+    #     func=mdp.contact_detection_reward,
+    #     weight=8.0, # ...but actually touching the cube is TWICE as good!
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+    #         "object_cfg": SceneEntityCfg("target_object"),
+    #     },
+    # )
 
     # ==========================================
     # STAGE 3: LIFT (High Weights: 20.0 - 50.0)
@@ -256,24 +256,24 @@ class RewardsCfg:
         },
     )
 
+    lift_height = RewTerm(
+    func=mdp.lift_height_reward,
+    weight=20.0, # Continuous payout for staying in the air
+    params={
+        "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+        "object_cfg": SceneEntityCfg("target_object"),
+        "resting_height": _OBJ_INIT_Z,
+        "max_height": _SUCCESS_Z,
+        "gate_std": 0.13,
+    },
+    )
+
     height_progress = RewTerm(
         func=mdp.height_progress_reward,
         weight=40.0, # The massive breakthrough payout
         params={
             "object_cfg": SceneEntityCfg("target_object"),
             "resting_height": _OBJ_INIT_Z,
-        },
-    )
-
-    lift_height = RewTerm(
-        func=mdp.lift_height_reward,
-        weight=20.0, # Continuous payout for staying in the air
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-            "resting_height": _OBJ_INIT_Z,
-            "max_height": _SUCCESS_Z,
-            "gate_std": 0.13,
         },
     )
 
@@ -296,7 +296,7 @@ class RewardsCfg:
 
     success = RewTerm(
         func=mdp.success_bonus,
-        weight=20.0, # Cherry on top
+        weight=50.0, # Cherry on top
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -316,7 +316,7 @@ class RewardsCfg:
 
     action_smoothness = RewTerm(
         func=mdp.action_smoothness_penalty,
-        weight=0.0,
+        weight=-0.05,
     )
     
     joint_limit_penalty = RewTerm(

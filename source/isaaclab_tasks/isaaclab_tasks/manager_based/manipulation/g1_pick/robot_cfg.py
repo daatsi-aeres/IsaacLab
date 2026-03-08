@@ -147,8 +147,8 @@ G1_INSPIRE_CFG = ArticulationCfg(
                 ".*_wrist_roll_joint",
             ],
             effort_limit_sim=25.0,  # Exact URDF match
-            stiffness=100.0,         # 1:1 ratio with effort is highly stable
-            damping=10,            # Critically damps the 25.0 stiffness
+            stiffness=80.0,         # 1:1 ratio with effort is highly stable
+            damping=15,            # Critically damps the 25.0 stiffness
         ),
         # ── Wrists (Delicate joints: 5 Nm limit) ──────────────────────────────
         "wrists": ImplicitActuatorCfg(
@@ -157,7 +157,7 @@ G1_INSPIRE_CFG = ArticulationCfg(
                 ".*_wrist_yaw_joint",
             ],
             effort_limit_sim=5.0,   # Exact URDF match
-            stiffness=40.0,
+            stiffness=20.0,
             damping=2.0,
         ),
         # ── Inspire Hands (Micro-geared: 10 Nm, 1 rad/s limit) ────────────────
@@ -182,8 +182,8 @@ G1_INSPIRE_CFG = ArticulationCfg(
                 "right_little_.*",
             ],
             effort_limit_sim=10.0,
-            stiffness=20.0,
-            damping=1.0,
+            stiffness=15.0,
+            damping=2.0,
         ),
     },
 )
