@@ -199,11 +199,13 @@ def object_displacement_reward(
 
 def lift_height_reward(
     env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,  # <-- Added robot_cfg to check finger positions
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
     resting_height: float = 0.850,
     max_height: float = 0.950,
+    gate_std: float = 0.13,     # <-- Added gate tolerance
 ) -> torch.Tensor:
-    """Reward proportional to how high cube is above resting — every timestep."""
+    """Reward proportional to how high cube is above resting, gated by finger proximity."""
     obj: RigidObject = env.scene[object_cfg.name]
     obj_z = obj.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
     
@@ -211,7 +213,10 @@ def lift_height_reward(
     height_above_resting = (obj_z - resting_height).clamp(0.0, max_height - resting_height)
     normalized = height_above_resting / (max_height - resting_height)
     
-    return normalized
+    # Gate the reward: hand must be near the cube to claim the lift points
+    gate = _get_proximity_gate(env, robot_cfg, object_cfg, gate_std)
+    
+    return gate * normalized
 
 def contact_detection_reward(
     env: ManagerBasedRLEnv,

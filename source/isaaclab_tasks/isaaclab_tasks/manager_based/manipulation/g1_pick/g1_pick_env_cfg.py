@@ -240,14 +240,16 @@ class RewardsCfg:
     )
 
     lift_height = RewTerm(
-        func=mdp.lift_height_reward,
-        weight=20.0,
-        params={
-            "object_cfg": SceneEntityCfg("target_object"),
-            "resting_height": _OBJ_INIT_Z,
-            "max_height": _SUCCESS_Z,
-        },
-    )
+            func=mdp.lift_height_reward,
+            weight=20.0,
+            params={
+                "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS), # <-- Add this line
+                "object_cfg": SceneEntityCfg("target_object"),
+                "resting_height": _OBJ_INIT_Z,
+                "max_height": _SUCCESS_Z,
+                "gate_std": 0.13,
+            },
+        )
 
     # object_displacement = RewTerm(
     # func=mdp.object_displacement_reward,
