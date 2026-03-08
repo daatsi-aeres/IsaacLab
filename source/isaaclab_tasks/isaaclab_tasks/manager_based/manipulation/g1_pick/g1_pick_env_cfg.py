@@ -105,7 +105,7 @@ class ActionsCfg:
             "right_wrist_pitch_joint",
             "right_wrist_yaw_joint",
         ],
-        scale=0.2,
+        scale=1.5,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
@@ -118,7 +118,7 @@ class ActionsCfg:
             "right_ring_1_joint",
             "right_little_1_joint",
         ],
-        scale=0.15,   # smaller scale for fingers — tighter joint ranges
+        scale=1.0,   # smaller scale for fingers — tighter joint ranges
         use_default_offset=True,
     )
 

@@ -137,51 +137,53 @@ G1_INSPIRE_CFG = ArticulationCfg(
             stiffness=20.0,
             damping=2.0,
         ),
-        # ── Arms (controlled) ─────────────────────────────────────────────────
-        "arms": ImplicitActuatorCfg(
+        # ── Arm Main (Heavy joints: 25 Nm limit) ─────────────────────────────
+        "arm_main": ImplicitActuatorCfg(
             joint_names_expr=[
                 ".*_shoulder_pitch_joint",
                 ".*_shoulder_roll_joint",
                 ".*_shoulder_yaw_joint",
                 ".*_elbow_joint",
                 ".*_wrist_roll_joint",
+            ],
+            effort_limit_sim=25.0,  # Exact URDF match
+            stiffness=100.0,         # 1:1 ratio with effort is highly stable
+            damping=10,            # Critically damps the 25.0 stiffness
+        ),
+        # ── Wrists (Delicate joints: 5 Nm limit) ──────────────────────────────
+        "wrists": ImplicitActuatorCfg(
+            joint_names_expr=[
                 ".*_wrist_pitch_joint",
                 ".*_wrist_yaw_joint",
             ],
-            effort_limit_sim=150,
-            stiffness=150.0,
-            damping=15.0,
+            effort_limit_sim=5.0,   # Exact URDF match
+            stiffness=40.0,
+            damping=2.0,
         ),
-        # ── Inspire hands (controlled) ────────────────────────────────────────
-        # All 12 joints per hand are in the actuator group.
-        # The policy controls only the 6 leader joints per hand (thumb_1/2, index/middle/ring/little_1).
-        # The 6 mimic joints (thumb_3/4, *_2 fingers) are excluded from the action space but
-        # are still actuated; they are reset to 0 each episode and held there by stiffness.
+        # ── Inspire Hands (Micro-geared: 10 Nm, 1 rad/s limit) ────────────────
         "left_hand": ImplicitActuatorCfg(
             joint_names_expr=[
-                "left_thumb_1_joint", "left_thumb_2_joint",
-                "left_thumb_3_joint", "left_thumb_4_joint",
-                "left_index_1_joint", "left_index_2_joint",
-                "left_middle_1_joint", "left_middle_2_joint",
-                "left_ring_1_joint", "left_ring_2_joint",
-                "left_little_1_joint", "left_little_2_joint",
+                "left_thumb_.*",
+                "left_index_.*",
+                "left_middle_.*",
+                "left_ring_.*",
+                "left_little_.*",
             ],
-            effort_limit_sim=10,
-            stiffness=20.0,
-            damping=2.0,
+            effort_limit_sim=10.0,  # Exact URDF match
+            stiffness=10.0,         # Mathematically stable for 0.028kg links
+            damping=1.0,            # Prevents the violent 120Hz vibrating
         ),
         "right_hand": ImplicitActuatorCfg(
             joint_names_expr=[
-                "right_thumb_1_joint", "right_thumb_2_joint",
-                "right_thumb_3_joint", "right_thumb_4_joint",
-                "right_index_1_joint", "right_index_2_joint",
-                "right_middle_1_joint", "right_middle_2_joint",
-                "right_ring_1_joint", "right_ring_2_joint",
-                "right_little_1_joint", "right_little_2_joint",
+                "right_thumb_.*",
+                "right_index_.*",
+                "right_middle_.*",
+                "right_ring_.*",
+                "right_little_.*",
             ],
-            effort_limit_sim=50,
-            stiffness=100.0,
-            damping=5.0,
+            effort_limit_sim=10.0,
+            stiffness=20.0,
+            damping=1.0,
         ),
     },
 )
