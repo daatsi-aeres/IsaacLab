@@ -196,10 +196,13 @@ class ObservationsCfg:
 @configclass
 class RewardsCfg:
 
-    # Stage 1 — approach
+    # ==========================================
+    # STAGE 1: APPROACH (Low Weights: 1.0 - 5.0)
+    # Goal: Get the hand to the tray
+    # ==========================================
     fingertip_proximity = RewTerm(
         func=mdp.fingertip_proximity_reward,
-        weight=1.5,
+        weight=2.0,  # Base breadcrumb
         params={
             "std": 0.08,
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
@@ -207,31 +210,22 @@ class RewardsCfg:
         },
     )
 
-    # NEW: Dense reward for moving tips directly toward the cube
     approach_velocity = RewTerm(
         func=mdp.approach_velocity_reward,
-        weight=5.0, 
+        weight=5.0,  # Higher than proximity so it actively moves, doesn't just sit
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
         },
     )
 
-    contact_detection = RewTerm(
-        func=mdp.contact_detection_reward,
-        weight=3.0,
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-            # contact_dist removed — no longer needed
-        },
-    )
-
-
-    # Stage 2 — grasp geometry
+    # ==========================================
+    # STAGE 2: GRASP (Medium Weights: 8.0 - 15.0)
+    # Goal: Wrap fingers and make physical contact
+    # ==========================================
     finger_closure = RewTerm(
         func=mdp.finger_closure_reward,
-        weight=8.0,
+        weight=8.0,  # Curling fingers is good...
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -239,33 +233,22 @@ class RewardsCfg:
         },
     )
 
-    lift_height = RewTerm(
-            func=mdp.lift_height_reward,
-            weight=20.0,
-            params={
-                "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS), # <-- Add this line
-                "object_cfg": SceneEntityCfg("target_object"),
-                "resting_height": _OBJ_INIT_Z,
-                "max_height": _SUCCESS_Z,
-                "gate_std": 0.13,
-            },
-        )
+    contact_detection = RewTerm(
+        func=mdp.contact_detection_reward,
+        weight=15.0, # ...but actually touching the cube is TWICE as good!
+        params={
+            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+            "object_cfg": SceneEntityCfg("target_object"),
+        },
+    )
 
-    # object_displacement = RewTerm(
-    # func=mdp.object_displacement_reward,
-    # weight=5.0,
-    # params={
-    #     "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-    #     "object_cfg": SceneEntityCfg("target_object"),
-    #     "gate_std": 0.13,
-    # },
-    # )
-
-    # Stage 3 — active upward motion, gated
-    # Frozen hand earns zero — must actively lift
+    # ==========================================
+    # STAGE 3: LIFT (High Weights: 20.0 - 50.0)
+    # Goal: Break gravity
+    # ==========================================
     upward_velocity = RewTerm(
         func=mdp.upward_velocity_reward,
-        weight=5.0,
+        weight=10.0, # Immediate reward for yanking upward
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -273,33 +256,47 @@ class RewardsCfg:
         },
     )
 
-    # Stage 4 — new height progress, freezing earns zero
     height_progress = RewTerm(
         func=mdp.height_progress_reward,
-        weight=50.0,
+        weight=40.0, # The massive breakthrough payout
         params={
             "object_cfg": SceneEntityCfg("target_object"),
             "resting_height": _OBJ_INIT_Z,
         },
     )
 
+    lift_height = RewTerm(
+        func=mdp.lift_height_reward,
+        weight=20.0, # Continuous payout for staying in the air
+        params={
+            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+            "object_cfg": SceneEntityCfg("target_object"),
+            "resting_height": _OBJ_INIT_Z,
+            "max_height": _SUCCESS_Z,
+            "gate_std": 0.13,
+        },
+    )
+
+    # ==========================================
+    # STAGE 4: SUCCESS (Max Weights: 50.0+)
+    # Goal: Freeze at the target height
+    # ==========================================
     hold_height = RewTerm(
         func=mdp.hold_height_reward,
-        weight=3.0,
+        weight=50.0, # Match height_progress so it prefers holding over throwing
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
             "target_height": _SUCCESS_Z + 0.03,
-            "min_height": 0.870,   # 20mm above resting — must lift before hold reward
+            "min_height": 0.870,
             "std": 0.05,
             "gate_std": 0.13,
         },
     )
 
-    # Sparse success bonus — lowered threshold to 30mm above resting
     success = RewTerm(
         func=mdp.success_bonus,
-        weight=10.0,
+        weight=20.0, # Cherry on top
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -308,30 +305,9 @@ class RewardsCfg:
         },
     )
 
-    # # Anti-freeze — small reward for any joint movement
-    # keep_moving = RewTerm(
-    #     func=mdp.joint_velocity_reward,
-    #     weight=0.1,
-    #     params={
-    #         "robot_cfg": SceneEntityCfg("robot", joint_names=[
-    #             "right_shoulder_pitch_joint",
-    #             "right_shoulder_roll_joint",
-    #             "right_shoulder_yaw_joint",
-    #             "right_elbow_joint",
-    #             "right_wrist_roll_joint",
-    #             "right_wrist_pitch_joint",
-    #             "right_wrist_yaw_joint",
-    #             "right_thumb_1_joint",
-    #             "right_thumb_2_joint",
-    #             "right_index_1_joint",
-    #             "right_middle_1_joint",
-    #             "right_ring_1_joint",
-    #             "right_little_1_joint",
-    #         ]),
-    #     },
-    # )
-
-    # Drop penalty — safe now, policy won't freeze to avoid it
+    # ==========================================
+    # PENALTIES (Zeroed out for exploration)
+    # ==========================================
     early_termination = RewTerm(
         func=mdp.is_terminated_term,
         weight=0.0,
@@ -342,29 +318,19 @@ class RewardsCfg:
         func=mdp.action_smoothness_penalty,
         weight=0.0,
     )
-    # Keep the termination but add a soft penalty too
+    
     joint_limit_penalty = RewTerm(
-    func=mdp.joint_pos_limit_penalty,
-    weight=0.0,
-    params={
-        "asset_cfg": SceneEntityCfg("robot", joint_names=[
-            "right_shoulder_pitch_joint",
-            "right_shoulder_roll_joint",
-            "right_shoulder_yaw_joint",
-            "right_elbow_joint",
-            "right_wrist_roll_joint",
-            "right_wrist_pitch_joint",
-            "right_wrist_yaw_joint",
-            "right_thumb_1_joint",
-            "right_thumb_2_joint",
-            "right_index_1_joint",
-            "right_middle_1_joint",
-            "right_ring_1_joint",
-            "right_little_1_joint",
-        ]),
-    },
-)
-
+        func=mdp.joint_pos_limit_penalty,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[
+                "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+                "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+                "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint", "right_middle_1_joint",
+                "right_ring_1_joint", "right_little_1_joint",
+            ]),
+        },
+    )
     
 
 
