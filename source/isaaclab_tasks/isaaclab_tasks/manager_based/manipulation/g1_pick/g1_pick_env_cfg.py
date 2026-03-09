@@ -22,8 +22,8 @@ from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 from .robot_cfg import G1_INSPIRE_CFG
 from . import mdp
 
-_OBJ_INIT_Z   = 0.852   # cube resting on tray (tray top ~0.820 + half-cube 0.025 + gap)
-_SUCCESS_Z    = 0.920   # 7 cm above resting = meaningful lift
+_OBJ_INIT_Z   = 0.837   # cube resting on tray (tray top ~0.820 + half-cube 0.025 + gap)
+_SUCCESS_Z    = 0.900   # 7 cm above resting = meaningful lift
 _DROP_Z       = 0.600   # below this → fell off table → terminate
 
 # Fingertip body names for the RIGHT hand only
@@ -67,7 +67,7 @@ class SceneCfg(InteractiveSceneCfg):
     target_object: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/TargetObject",
         spawn=sim_utils.CuboidCfg(
-            size=(0.05, 0.05, 0.05),
+            size=(0.03, 0.03, 0.03),
             physics_material=RigidBodyMaterialCfg(static_friction=1.5, dynamic_friction=1.5),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -316,7 +316,7 @@ class RewardsCfg:
 
     action_smoothness = RewTerm(
         func=mdp.action_smoothness_penalty,
-        weight=0.0,
+        weight=-0.01,
     )
     
     joint_limit_penalty = RewTerm(

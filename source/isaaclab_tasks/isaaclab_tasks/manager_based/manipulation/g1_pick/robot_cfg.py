@@ -72,27 +72,31 @@ G1_INSPIRE_CFG = ArticulationCfg(
             ".*_hip_pitch_joint": -0.20,
             ".*_knee_joint": 0.42,
             ".*_ankle_pitch_joint": -0.23,
+            
             # ── Waist: neutral ─────────────────────────────────────────────────
             "waist_yaw_joint": 0.0,
             "waist_roll_joint": 0.0,
             "waist_pitch_joint": 0.0,
-            # ── Arms: hands pre-positioned over tray ──────────────────────────
-            # G1 elbow convention: NEGATIVE = forward (toward table), POSITIVE = backward.
-            # Joint range: -1.05 to +2.09 rad.
-            # shoulder_pitch =  1.0 rad → arms swing ~57° forward
-            # shoulder_roll  = ±0.1 rad → slight inward to center over tray
-            # elbow          = -0.8 rad → forward reach toward table; 0.25 rad from limit
-            # wrist_pitch    = -0.8 rad → palms face down toward objects
-            ".*_shoulder_pitch_joint": -0.5,
-            "left_shoulder_roll_joint": -0.1,
+            
+            # ── RIGHT Arm: hands pre-positioned over tray ──────────────────────
+            "right_shoulder_pitch_joint": -0.5,
             "right_shoulder_roll_joint": 0.1,
-            ".*_shoulder_yaw_joint": 0.0,
-            ".*_elbow_joint": 0.3,
-            ".*_wrist_roll_joint": 0.0,
-            ".*_wrist_pitch_joint": -0.8,
-            ".*_wrist_yaw_joint": 0.0,
-            # ── Inspire hands: fully open ──────────────────────────────────────
-            # In init_state joint_pos
+            "right_shoulder_yaw_joint": 0.0,
+            "right_elbow_joint": 0.3,
+            "right_wrist_roll_joint": 0.0,
+            "right_wrist_pitch_joint": -0.8,
+            "right_wrist_yaw_joint": 0.0,
+
+            # ── LEFT Arm: hanging straight down (out of the way) ───────────────
+            "left_shoulder_pitch_joint": 0.0,
+            "left_shoulder_roll_joint": 0.0,
+            "left_shoulder_yaw_joint": 0.0,
+            "left_elbow_joint": 0.0,
+            "left_wrist_roll_joint": 0.0,
+            "left_wrist_pitch_joint": 0.0,
+            "left_wrist_yaw_joint": 0.0,
+
+            # ── Inspire hands: right hand fully open ───────────────────────────
             "right_thumb_1_joint": 0.5,   # midrange of 0 to 1.164
             "right_thumb_2_joint": 0.25,  # midrange of 0 to 0.586
             "right_index_1_joint": 0.6,   # midrange of 0 to 1.438
