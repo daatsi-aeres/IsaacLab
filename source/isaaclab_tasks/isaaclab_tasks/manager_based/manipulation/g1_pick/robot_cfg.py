@@ -88,8 +88,8 @@ G1_INSPIRE_CFG = ArticulationCfg(
             "right_wrist_yaw_joint": 0.0,
 
             # ── LEFT Arm: hanging straight down (out of the way) ───────────────
-            "left_shoulder_pitch_joint": 0.0,
-            "left_shoulder_roll_joint": 0.0,
+            "left_shoulder_pitch_joint": 1.5,
+            "left_shoulder_roll_joint": 0.5,
             "left_shoulder_yaw_joint": 0.0,
             "left_elbow_joint": 0.0,
             "left_wrist_roll_joint": 0.0,
