@@ -78,7 +78,7 @@ class SceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.45, 0.05, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.40, 0.00, _OBJ_INIT_Z]),
     )
 
     plane = AssetBaseCfg(
@@ -210,14 +210,14 @@ class RewardsCfg:
         },
     )
 
-    approach_velocity = RewTerm(
-        func=mdp.approach_velocity_reward,
-        weight=3.0,  # Higher than proximity so it actively moves, doesn't just sit
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-        },
-    )
+    # approach_velocity = RewTerm(
+    #     func=mdp.approach_velocity_reward,
+    #     weight=3.0,  # Higher than proximity so it actively moves, doesn't just sit
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+    #         "object_cfg": SceneEntityCfg("target_object"),
+    #     },
+    # )
 
     # ==========================================
     # STAGE 2: GRASP (Medium Weights: 8.0 - 15.0)
@@ -233,14 +233,14 @@ class RewardsCfg:
         },
     )
 
-    # contact_detection = RewTerm(
-    #     func=mdp.contact_detection_reward,
-    #     weight=8.0, # ...but actually touching the cube is TWICE as good!
-    #     params={
-    #         "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-    #         "object_cfg": SceneEntityCfg("target_object"),
-    #     },
-    # )
+    contact_detection = RewTerm(
+        func=mdp.contact_detection_reward,
+        weight=5.0, # ...but actually touching the cube is TWICE as good!
+        params={
+            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+            "object_cfg": SceneEntityCfg("target_object"),
+        },
+    )
 
     # ==========================================
     # STAGE 3: LIFT (High Weights: 20.0 - 50.0)
@@ -268,14 +268,14 @@ class RewardsCfg:
     },
     )
 
-    height_progress = RewTerm(
-        func=mdp.height_progress_reward,
-        weight=40.0, # The massive breakthrough payout
-        params={
-            "object_cfg": SceneEntityCfg("target_object"),
-            "resting_height": _OBJ_INIT_Z,
-        },
-    )
+    # height_progress = RewTerm(
+    #     func=mdp.height_progress_reward,
+    #     weight=40.0, # The massive breakthrough payout
+    #     params={
+    #         "object_cfg": SceneEntityCfg("target_object"),
+    #         "resting_height": _OBJ_INIT_Z,
+    #     },
+    # )
 
     # ==========================================
     # STAGE 4: SUCCESS (Max Weights: 50.0+)
@@ -316,7 +316,7 @@ class RewardsCfg:
 
     action_smoothness = RewTerm(
         func=mdp.action_smoothness_penalty,
-        weight=-0.05,
+        weight=0.0,
     )
     
     joint_limit_penalty = RewTerm(
@@ -421,7 +421,7 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.10, 0.10), "y": (-0.15, 0.15), "z": (0.01, 0.01)},
+            "pose_range": {"x": (-0.10, 0.10), "y": (-0.05, 0.05), "z": (0.01, 0.01)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("target_object"),
         },
