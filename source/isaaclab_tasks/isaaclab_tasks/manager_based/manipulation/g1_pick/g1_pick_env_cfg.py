@@ -22,7 +22,7 @@ from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 from .robot_cfg import G1_INSPIRE_CFG
 from . import mdp
 
-_OBJ_INIT_Z   = 0.837   # cube resting on tray (tray top ~0.820 + half-cube 0.025 + gap)
+_OBJ_INIT_Z   = 0.840   # cube resting on tray (tray top ~0.820 + half-cube 0.025 + gap)
 _SUCCESS_Z    = 0.900   # 7 cm above resting = meaningful lift
 _DROP_Z       = 0.600   # below this → fell off table → terminate
 
@@ -67,7 +67,7 @@ class SceneCfg(InteractiveSceneCfg):
     target_object: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/TargetObject",
         spawn=sim_utils.CuboidCfg(
-            size=(0.035, 0.035, 0.035),
+            size=(0.04, 0.04, 0.04),
             physics_material=RigidBodyMaterialCfg(static_friction=1.5, dynamic_friction=1.5),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -177,7 +177,7 @@ class ObservationsCfg:
         # # Fingertip-to-object delta vectors — most direct grasp signal
         # # shape: (N, 5*3=15)  each vector points from tip to cube centre
         fingertip_to_object = ObsTerm(
-            func=mdp.fingertip_to_object_vectors,  # see obs.py below
+            func=mdp.fingertip_to_object_vectors,  
             params={
                 "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
                 "object_cfg": SceneEntityCfg("target_object"),
@@ -202,7 +202,7 @@ class RewardsCfg:
     # ==========================================
     fingertip_proximity = RewTerm(
         func=mdp.fingertip_proximity_reward,
-        weight=2.0,  # Base breadcrumb
+        weight=1.0,  # Base breadcrumb
         params={
             "std": 0.08,
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
@@ -223,16 +223,6 @@ class RewardsCfg:
     # STAGE 2: GRASP (Medium Weights: 8.0 - 15.0)
     # Goal: Wrap fingers and make physical contact
     # ==========================================
-    finger_closure = RewTerm(
-        func=mdp.finger_closure_reward,
-        weight=5.0,  # Curling fingers is good...
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-            "max_closure_dist": 0.1 ,
-        },
-    )
-
     contact_detection = RewTerm(
         func=mdp.contact_detection_reward,
         weight=1.0, # ...but actually touching the cube is TWICE as good!
@@ -242,13 +232,24 @@ class RewardsCfg:
         },
     )
 
+    finger_closure = RewTerm(
+        func=mdp.finger_closure_reward,
+        weight=3.0,  # Curling fingers is good...
+        params={
+            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+            "object_cfg": SceneEntityCfg("target_object"),
+            "max_closure_dist": 0.05,  # how close the fingertips need to be to the cube to count as "closed",
+        },
+    )
+
+
     # ==========================================
     # STAGE 3: LIFT (High Weights: 20.0 - 50.0)
     # Goal: Break gravity
     # ==========================================
     upward_velocity = RewTerm(
         func=mdp.upward_velocity_reward,
-        weight=2.0, # Immediate reward for yanking upward
+        weight=5.0, # Immediate reward for yanking upward
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -262,7 +263,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
-            "resting_height": _OBJ_INIT_Z+0.007,  # slightly above initial to reward any lift off the tray
+            "resting_height": _OBJ_INIT_Z+0.01,  # slightly above initial to reward any lift off the tray
             "max_height": _SUCCESS_Z,
             "gate_std": 0.13,
         },
