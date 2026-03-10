@@ -199,24 +199,29 @@ def object_displacement_reward(
 
 def lift_height_reward(
     env: ManagerBasedRLEnv,
-    robot_cfg: SceneEntityCfg,  # <-- Added robot_cfg to check finger positions
+    robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
     resting_height: float = 0.850,
     max_height: float = 0.950,
-    gate_std: float = 0.13,     # <-- Added gate tolerance
+    gate_std: float = 0.13,
 ) -> torch.Tensor:
-    """Reward proportional to how high cube is above resting, gated by finger proximity."""
-    obj: RigidObject = env.scene[object_cfg.name]
+    """Convex reward for lifting the object. Kills micro-bounce farming by squaring the progress."""
+    obj = env.scene[object_cfg.name]
     obj_z = obj.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
     
-    # Normalize height above resting to [0, 1]
-    height_above_resting = (obj_z - resting_height).clamp(0.0, max_height - resting_height)
-    normalized = height_above_resting / (max_height - resting_height)
+    # 1. Calculate how far it has lifted
+    lift_dist = (obj_z - resting_height).clamp(min=0.0)
     
-    # Gate the reward: hand must be near the cube to claim the lift points
+    # 2. Normalize to a 0.0 to 1.0 scale
+    normalized_height = (lift_dist / (max_height - resting_height)).clamp(max=1.0)
+    
+    # 3. Apply the Convex "Snowball" Curve (Square the normalized height)
+    convex_reward = torch.pow(normalized_height, 2.0)
+    
+    # 4. Gate it by finger proximity so the robot must actually be holding it
     gate = _get_proximity_gate(env, robot_cfg, object_cfg, gate_std)
     
-    return gate * normalized
+    return gate * convex_reward
 
 def contact_detection_reward(
     env: ManagerBasedRLEnv,

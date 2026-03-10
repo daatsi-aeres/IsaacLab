@@ -67,7 +67,7 @@ class SceneCfg(InteractiveSceneCfg):
     target_object: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/TargetObject",
         spawn=sim_utils.CuboidCfg(
-            size=(0.03, 0.03, 0.03),
+            size=(0.035, 0.035, 0.035),
             physics_material=RigidBodyMaterialCfg(static_friction=1.5, dynamic_friction=1.5),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -257,15 +257,15 @@ class RewardsCfg:
     )
 
     lift_height = RewTerm(
-    func=mdp.lift_height_reward,
-    weight=20.0, # Continuous payout for staying in the air
-    params={
-        "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-        "object_cfg": SceneEntityCfg("target_object"),
-        "resting_height": _OBJ_INIT_Z,
-        "max_height": _SUCCESS_Z,
-        "gate_std": 0.13,
-    },
+        func=mdp.lift_height_reward,  # Now points to your new convex function
+        weight=40.0,  # Increased to 40.0 to replace the deleted height_progress reward
+        params={
+            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+            "object_cfg": SceneEntityCfg("target_object"),
+            "resting_height": _OBJ_INIT_Z+0.007,  # slightly above initial to reward any lift off the tray
+            "max_height": _SUCCESS_Z,
+            "gate_std": 0.13,
+        },
     )
 
     # height_progress = RewTerm(
