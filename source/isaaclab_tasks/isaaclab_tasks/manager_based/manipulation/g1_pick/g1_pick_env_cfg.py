@@ -235,7 +235,7 @@ class RewardsCfg:
 
     contact_detection = RewTerm(
         func=mdp.contact_detection_reward,
-        weight=5.0, # ...but actually touching the cube is TWICE as good!
+        weight=1.0, # ...but actually touching the cube is TWICE as good!
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
@@ -248,7 +248,7 @@ class RewardsCfg:
     # ==========================================
     upward_velocity = RewTerm(
         func=mdp.upward_velocity_reward,
-        weight=10.0, # Immediate reward for yanking upward
+        weight=2.0, # Immediate reward for yanking upward
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
