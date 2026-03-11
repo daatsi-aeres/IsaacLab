@@ -26,17 +26,15 @@ _OBJ_INIT_Z   = 0.850   # cube resting on tray
 _SUCCESS_Z    = 0.900   # meaningful lift threshold 
 _DROP_Z       = 0.600   # below this → fell off table → terminate
 
-_RIGHT_TIPS = [
-    "right_thumb_4",
-    "right_index_2",
-    "right_middle_2",
-    "right_ring_2",
-    "right_little_2",
+_RIGHT_HAND_BODIES = [
+    "right_palm_force_sensor", # Index 0: The rigid palm center
+    "right_thumb_4",           # Index 1: Tip
+    "right_index_2",           # Index 2: Tip
+    "right_middle_2",          # Index 3: Tip
+    "right_ring_2",            # Index 4: Tip
+    "right_little_2",          # Index 5: Tip
 ]
 
-# ==========================================
-#  WUJI-STYLE MONOLITHIC REWARD
-# ==========================================
 def wuji_monolithic_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
@@ -47,27 +45,41 @@ def wuji_monolithic_reward(
     obj: RigidObject = env.scene[object_cfg.name]
 
     object_pos = obj.data.root_pos_w.clone()
-    # shifted the object_pos down by 0.03 for calculations
-    object_pos[:, 2] = object_pos[:, 2] - 0.03
+    object_pos[:, 2] = object_pos[:, 2] - 0.03 # Shift to tray surface
 
-    # Use the centroid of the 5 fingertips as the 'hand_pos' proxy
-    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids] # (N, 5, 3)
-    hand_pos = tips_w.mean(dim=1) # (N, 3)
+    # ==========================================
+    # 1. EXTRACT SEPARATE HAND AND TIP POSITIONS
+    # ==========================================
+    # Index 0 is the palm sensor, Indices 1-5 are the fingertips
+    hand_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]] # (N, 3)
+    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]  # (N, 5, 3)
+
+    # ==========================================
+    # 2. FINGERTIP REWARD (Pull fingers to cube)
+    # ==========================================
+    # We want the tips touching the cube center
+    dists = torch.linalg.norm(tips_w - object_pos.unsqueeze(1), dim=-1) # (N, 5)
+    fingertip_dist_avg = dists.mean(dim=1) # (N,)
+    hand_finger_rew = 1.0 - torch.tanh(fingertip_dist_avg / 0.1) 
 
     actions = env.action_manager.action
+    action_penalty = torch.sum(actions**2, dim=-1).clamp(min=0.0, max=1.0)
 
-    # Action regularization (penalty)
-    action_penalty = torch.sum(actions**2, dim=-1)
-    action_penalty = action_penalty.clamp(min=0.0, max=1.0)
-
-    # Virtual hand target (offset from cube to create a pre-grasp pose)
+    # ==========================================
+    # 3. PALM PRE-GRASP TARGET (Park arm behind cube)
+    # ==========================================
     hand_object_pos = object_pos.clone()
-    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.01 # Offset behind the cube
-    hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.01  # Offset above the cube
+    # The Inspire fingers need room to wrap around the 6cm block.
+    # We park the flat palm 6.5 cm behind and slightly above the block.
+    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.065 
+    hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.040  
 
     hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
     hand_object_rew = 1.0 - torch.tanh(hand_object_dist / 0.3)
 
+    # ==========================================
+    # 4. LIFT AND GOAL CALCULATIONS (You missed this part!)
+    # ==========================================
     # Lift logic adapted to G1 heights
     lift_rew = torch.where(object_pos[:, 2] > _SUCCESS_Z, 1.0, 0.0)
     lift_cont_rew = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
@@ -80,10 +92,14 @@ def wuji_monolithic_reward(
     r_close = 0.1
     close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
 
-    # Total reward (Exact weights)
+    # ==========================================
+    # 5. TOTAL REWARD AGGREGATION
+    # ==========================================
+    # Total reward (Exact weights + finger closing reward)
     reward = (
         0.25 * hand_object_rew
         + close_bonus
+        + 0.5 * hand_finger_rew 
         - action_penalty * action_penalty_scale
         + lift_rew * 25.0
         + goal_rew * 16.0
@@ -92,7 +108,10 @@ def wuji_monolithic_reward(
         - 0.005 # Alive penalty to encourage speed
     )
 
-    # Terminal failure penalty (if dropped)
+    # ==========================================
+    # 6. TERMINAL FAILURE PENALTY (You missed this too!)
+    # ==========================================
+    # If it knocks the cube off the tray, hit it with a massive -5.0
     resets = torch.where(
         obj.data.root_pos_w[:, 2] < _DROP_Z,
         torch.ones_like(reward),
@@ -101,6 +120,7 @@ def wuji_monolithic_reward(
     reward = torch.where(resets == 1, torch.ones_like(reward) * -5.0, reward)
 
     return reward
+
 
 # ==========================================
 # CONFIGURATIONS
@@ -169,7 +189,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=1.0,
+        scale=1.2,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
@@ -215,7 +235,7 @@ class ObservationsCfg:
         )
         right_fingertip_pos = ObsTerm(
             func=mdp.fingertip_positions_b,
-            params={"robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS)},
+            params={"robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES)},
         )
         actions = ObsTerm(func=mdp.last_action)
 
@@ -233,7 +253,7 @@ class RewardsCfg:
         func=wuji_monolithic_reward,
         weight=1.0, # The function internally scales all the values
         params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
+            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
             "action_penalty_scale": 0.0,
         },
