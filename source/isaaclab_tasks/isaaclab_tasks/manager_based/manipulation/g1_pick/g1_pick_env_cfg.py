@@ -27,7 +27,7 @@ _SUCCESS_Z    = 0.900   # meaningful lift threshold
 _DROP_Z       = 0.600   # below this → fell off table → terminate
 
 _RIGHT_HAND_BODIES = [
-    "right_palm_force_sensor", # Index 0: The rigid palm center
+    "right_wrist_yaw_link", # Index 0: The rigid palm center
     "right_thumb_4",           # Index 1: Tip
     "right_index_2",           # Index 2: Tip
     "right_middle_2",          # Index 3: Tip
@@ -71,7 +71,7 @@ def wuji_monolithic_reward(
     hand_object_pos = object_pos.clone()
     # The Inspire fingers need room to wrap around the 6cm block.
     # We park the flat palm 6.5 cm behind and slightly above the block.
-    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.065 
+    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.160 
     hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.040  
 
     hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
