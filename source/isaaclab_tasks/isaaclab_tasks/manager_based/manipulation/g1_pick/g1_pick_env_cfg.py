@@ -1,4 +1,4 @@
-# g1_phd_env_cfg.py
+# g1_env_cfg.py
 
 from __future__ import annotations
 import copy
@@ -23,7 +23,7 @@ from .robot_cfg import G1_INSPIRE_CFG
 from . import mdp
 
 _OBJ_INIT_Z   = 0.840   # cube resting on tray
-_SUCCESS_Z    = 0.900   # meaningful lift threshold (replaces PhD's 0.3)
+_SUCCESS_Z    = 0.900   # meaningful lift threshold (replaces 0.3)
 _DROP_Z       = 0.600   # below this → fell off table → terminate
 
 _RIGHT_TIPS = [
@@ -37,7 +37,7 @@ _RIGHT_TIPS = [
 # ==========================================
 #  WUJI-STYLE MONOLITHIC REWARD
 # ==========================================
-def phd_wuji_monolithic_reward(
+def wuji_monolithic_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg,
@@ -47,7 +47,7 @@ def phd_wuji_monolithic_reward(
     obj: RigidObject = env.scene[object_cfg.name]
 
     object_pos = obj.data.root_pos_w.clone()
-    # The PhD shifted the object_pos down by 0.03 for calculations
+    # shifted the object_pos down by 0.03 for calculations
     object_pos[:, 2] = object_pos[:, 2] - 0.03
 
     # Use the centroid of the 5 fingertips as the 'hand_pos' proxy
@@ -80,7 +80,7 @@ def phd_wuji_monolithic_reward(
     r_close = 0.1
     close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
 
-    # Total reward (Exact PhD weights)
+    # Total reward (Exact weights)
     reward = (
         0.25 * hand_object_rew
         + close_bonus
@@ -229,8 +229,8 @@ class ObservationsCfg:
 @configclass
 class RewardsCfg:
     # We replace your entire previous reward structure with the single monolithic function
-    phd_wuji_total = RewTerm(
-        func=phd_wuji_monolithic_reward,
+    wuji_total = RewTerm(
+        func=wuji_monolithic_reward,
         weight=1.0, # The function internally scales all the values
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
