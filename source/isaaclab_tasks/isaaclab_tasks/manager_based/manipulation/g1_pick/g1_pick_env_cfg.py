@@ -62,8 +62,8 @@ def wuji_monolithic_reward(
 
     # Virtual hand target (offset from cube to create a pre-grasp pose)
     hand_object_pos = object_pos.clone()
-    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.075 # Offset behind the cube
-    hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.05  # Offset above the cube
+    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.01 # Offset behind the cube
+    hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.01  # Offset above the cube
 
     hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
     hand_object_rew = 1.0 - torch.tanh(hand_object_dist / 0.3)
@@ -169,7 +169,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=0.3,
+        scale=1.0,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
@@ -178,7 +178,7 @@ class ActionsCfg:
             "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint",
             "right_middle_1_joint", "right_ring_1_joint", "right_little_1_joint",
         ],
-        scale=0.7,
+        scale=1.0,
         use_default_offset=True,
     )
 
@@ -235,7 +235,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_penalty_scale": 1.0,
+            "action_penalty_scale": 0.0,
         },
     )
 
