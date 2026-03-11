@@ -1,12 +1,13 @@
-# env_cfg.py — G1 right-arm-only lift, fresh start
+# g1_phd_env_cfg.py
 
 from __future__ import annotations
 import copy
+import torch
 from dataclasses import MISSING
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
-from isaaclab.envs import ManagerBasedRLEnvCfg, ViewerCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg, Articulation, RigidObject
+from isaaclab.envs import ManagerBasedRLEnvCfg, ViewerCfg, ManagerBasedRLEnv
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -17,16 +18,14 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import CuboidCfg, RigidBodyMaterialCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 
 from .robot_cfg import G1_INSPIRE_CFG
 from . import mdp
 
-_OBJ_INIT_Z   = 0.840   # cube resting on tray (tray top ~0.820 + half-cube 0.025 + gap)
-_SUCCESS_Z    = 0.900   # 7 cm above resting = meaningful lift
+_OBJ_INIT_Z   = 0.840   # cube resting on tray
+_SUCCESS_Z    = 0.900   # meaningful lift threshold (replaces PhD's 0.3)
 _DROP_Z       = 0.600   # below this → fell off table → terminate
 
-# Fingertip body names for the RIGHT hand only
 _RIGHT_TIPS = [
     "right_thumb_4",
     "right_index_2",
@@ -35,11 +34,81 @@ _RIGHT_TIPS = [
     "right_little_2",
 ]
 
+# ==========================================
+#  WUJI-STYLE MONOLITHIC REWARD
+# ==========================================
+def phd_wuji_monolithic_reward(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg,
+    action_penalty_scale: float = 1.0,
+) -> torch.Tensor:
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+
+    object_pos = obj.data.root_pos_w.clone()
+    # The PhD shifted the object_pos down by 0.03 for calculations
+    object_pos[:, 2] = object_pos[:, 2] - 0.03
+
+    # Use the centroid of the 5 fingertips as the 'hand_pos' proxy
+    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids] # (N, 5, 3)
+    hand_pos = tips_w.mean(dim=1) # (N, 3)
+
+    actions = env.action_manager.action
+
+    # Action regularization (penalty)
+    action_penalty = torch.sum(actions**2, dim=-1)
+    action_penalty = action_penalty.clamp(min=0.0, max=1.0)
+
+    # Virtual hand target (offset from cube to create a pre-grasp pose)
+    hand_object_pos = object_pos.clone()
+    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.075 # Offset behind the cube
+    hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.05  # Offset above the cube
+
+    hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
+    hand_object_rew = 1.0 - torch.tanh(hand_object_dist / 0.3)
+
+    # Lift logic adapted to G1 heights
+    lift_rew = torch.where(object_pos[:, 2] > _SUCCESS_Z, 1.0, 0.0)
+    lift_cont_rew = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
+    
+    goal_rew = (object_pos[:, 2] > _SUCCESS_Z).float() * (1.0 - torch.tanh(hand_object_dist / 0.3))
+    goal_rew_fine_grained = (object_pos[:, 2] > _SUCCESS_Z).float() * (
+        1.0 - torch.tanh(hand_object_dist / 0.05)
+    )
+
+    r_close = 0.1
+    close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
+
+    # Total reward (Exact PhD weights)
+    reward = (
+        0.25 * hand_object_rew
+        + close_bonus
+        - action_penalty * action_penalty_scale
+        + lift_rew * 25.0
+        + goal_rew * 16.0
+        + goal_rew_fine_grained * 5.0
+        + lift_cont_rew * 10.0
+        - 0.005 # Alive penalty to encourage speed
+    )
+
+    # Terminal failure penalty (if dropped)
+    resets = torch.where(
+        obj.data.root_pos_w[:, 2] < _DROP_Z,
+        torch.ones_like(reward),
+        torch.zeros_like(reward)
+    )
+    reward = torch.where(resets == 1, torch.ones_like(reward) * -5.0, reward)
+
+    return reward
+
+# ==========================================
+# CONFIGURATIONS
+# ==========================================
 
 @configclass
 class SceneCfg(InteractiveSceneCfg):
     replicate_physics: bool = True
-
     robot: ArticulationCfg = G1_INSPIRE_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     table = AssetBaseCfg(
@@ -97,13 +166,8 @@ class ActionsCfg:
     right_arm_action = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[
-            "right_shoulder_pitch_joint",
-            "right_shoulder_roll_joint",
-            "right_shoulder_yaw_joint",
-            "right_elbow_joint",
-            "right_wrist_roll_joint",
-            "right_wrist_pitch_joint",
-            "right_wrist_yaw_joint",
+            "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+            "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
         scale=1.5,
         use_default_offset=True,
@@ -111,14 +175,10 @@ class ActionsCfg:
     right_hand_action = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[
-            "right_thumb_1_joint",
-            "right_thumb_2_joint",
-            "right_index_1_joint",
-            "right_middle_1_joint",
-            "right_ring_1_joint",
-            "right_little_1_joint",
+            "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint",
+            "right_middle_1_joint", "right_ring_1_joint", "right_little_1_joint",
         ],
-        scale=1.0,   # smaller scale for fingers — tighter joint ranges
+        scale=1.0,
         use_default_offset=True,
     )
 
@@ -127,67 +187,40 @@ class ActionsCfg:
 class ObservationsCfg:
     @configclass
     class PolicyCfg(ObsGroup):
-        # Joint state — right arm + hand only keeps obs small and focused
         joint_pos = ObsTerm(
             func=mdp.joint_pos_rel,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=[
-                "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
-                "right_shoulder_yaw_joint", "right_elbow_joint",
-                "right_wrist_roll_joint", "right_wrist_pitch_joint",
-                "right_wrist_yaw_joint",
-                "right_thumb_1_joint", "right_thumb_2_joint",
-                "right_index_1_joint", "right_middle_1_joint",
+                "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", 
+                "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+                "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint", "right_middle_1_joint",
                 "right_ring_1_joint", "right_little_1_joint",
             ])},
         )
         joint_vel = ObsTerm(
             func=mdp.joint_vel_rel,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=[
-                "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
-                "right_shoulder_yaw_joint", "right_elbow_joint",
-                "right_wrist_roll_joint", "right_wrist_pitch_joint",
-                "right_wrist_yaw_joint",
-                "right_thumb_1_joint", "right_thumb_2_joint",
-                "right_index_1_joint", "right_middle_1_joint",
+                "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", 
+                "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+                "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint", "right_middle_1_joint",
                 "right_ring_1_joint", "right_little_1_joint",
             ])},
         )
-
-        # Object state in robot frame — position + velocity
         object_pos_b = ObsTerm(
             func=mdp.target_object_position_b,
-            params={
-                "robot_cfg": SceneEntityCfg("robot"),
-                "object_cfg": SceneEntityCfg("target_object"),
-            },
+            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("target_object")},
         )
         object_vel = ObsTerm(
-            func=mdp.object_root_velocity,   # see obs.py below
+            func=mdp.object_root_velocity,
             params={"object_cfg": SceneEntityCfg("target_object")},
         )
-
-        # RIGHT fingertip positions in robot frame — 5 tips × 3 = 15 values
         right_fingertip_pos = ObsTerm(
             func=mdp.fingertip_positions_b,
-            params={
-                "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            },
+            params={"robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS)},
         )
-
-        # # Fingertip-to-object delta vectors — most direct grasp signal
-        # # shape: (N, 5*3=15)  each vector points from tip to cube centre
-        fingertip_to_object = ObsTerm(
-            func=mdp.fingertip_to_object_vectors,  
-            params={
-                "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-                "object_cfg": SceneEntityCfg("target_object"),
-            },
-        )
-
         actions = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
-            self.enable_corruption = False   # no noise during initial training
+            self.enable_corruption = False
             self.concatenate_terms = True
 
     policy: PolicyCfg = PolicyCfg()
@@ -195,149 +228,20 @@ class ObservationsCfg:
 
 @configclass
 class RewardsCfg:
-
-    # ==========================================
-    # STAGE 1: APPROACH (Low Weights: 1.0 - 5.0)
-    # Goal: Get the hand to the tray
-    # ==========================================
-    fingertip_proximity = RewTerm(
-        func=mdp.fingertip_proximity_reward,
-        weight=1.0,  # Base breadcrumb
-        params={
-            "std": 0.08,
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-        },
-    )
-
-    # approach_velocity = RewTerm(
-    #     func=mdp.approach_velocity_reward,
-    #     weight=3.0,  # Higher than proximity so it actively moves, doesn't just sit
-    #     params={
-    #         "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-    #         "object_cfg": SceneEntityCfg("target_object"),
-    #     },
-    # )
-
-    # ==========================================
-    # STAGE 2: GRASP (Medium Weights: 8.0 - 15.0)
-    # Goal: Wrap fingers and make physical contact
-    # ==========================================
-    contact_detection = RewTerm(
-        func=mdp.contact_detection_reward,
-        weight=1.0, # ...but actually touching the cube is TWICE as good!
+    # We replace your entire previous reward structure with the single monolithic function
+    phd_wuji_total = RewTerm(
+        func=phd_wuji_monolithic_reward,
+        weight=1.0, # The function internally scales all the values
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
             "object_cfg": SceneEntityCfg("target_object"),
+            "action_penalty_scale": 1.0,
         },
     )
-
-    finger_closure = RewTerm(
-        func=mdp.finger_closure_reward,
-        weight=3.0,  # Curling fingers is good...
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-            "max_closure_dist": 0.05,  # how close the fingertips need to be to the cube to count as "closed",
-        },
-    )
-
-
-    # ==========================================
-    # STAGE 3: LIFT (High Weights: 20.0 - 50.0)
-    # Goal: Break gravity
-    # ==========================================
-    upward_velocity = RewTerm(
-        func=mdp.upward_velocity_reward,
-        weight=5.0, # Immediate reward for yanking upward
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-            "gate_std": 0.13,
-        },
-    )
-
-    lift_height = RewTerm(
-        func=mdp.lift_height_reward,  # Now points to your new convex function
-        weight=40.0,  # Increased to 40.0 to replace the deleted height_progress reward
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-            "resting_height": _OBJ_INIT_Z+0.01,  # slightly above initial to reward any lift off the tray
-            "max_height": _SUCCESS_Z,
-            "gate_std": 0.13,
-        },
-    )
-
-    # height_progress = RewTerm(
-    #     func=mdp.height_progress_reward,
-    #     weight=40.0, # The massive breakthrough payout
-    #     params={
-    #         "object_cfg": SceneEntityCfg("target_object"),
-    #         "resting_height": _OBJ_INIT_Z,
-    #     },
-    # )
-
-    # ==========================================
-    # STAGE 4: SUCCESS (Max Weights: 50.0+)
-    # Goal: Freeze at the target height
-    # ==========================================
-    hold_height = RewTerm(
-        func=mdp.hold_height_reward,
-        weight=50.0, # Match height_progress so it prefers holding over throwing
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-            "target_height": _SUCCESS_Z + 0.03,
-            "min_height": 0.870,
-            "std": 0.05,
-            "gate_std": 0.13,
-        },
-    )
-
-    success = RewTerm(
-        func=mdp.success_bonus,
-        weight=50.0, # Cherry on top
-        params={
-            "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_TIPS),
-            "object_cfg": SceneEntityCfg("target_object"),
-            "success_height": 0.880,
-            "gate_std": 0.13,
-        },
-    )
-
-    # ==========================================
-    # PENALTIES (Zeroed out for exploration)
-    # ==========================================
-    early_termination = RewTerm(
-        func=mdp.is_terminated_term,
-        weight=0.0,
-        params={"term_keys": "target_dropped"},
-    )
-
-    action_smoothness = RewTerm(
-        func=mdp.action_smoothness_penalty,
-        weight=-0.01,
-    )
-    
-    joint_limit_penalty = RewTerm(
-        func=mdp.joint_pos_limit_penalty,
-        weight=0.0,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=[
-                "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
-                "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
-                "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint", "right_middle_1_joint",
-                "right_ring_1_joint", "right_little_1_joint",
-            ]),
-        },
-    )
-    
 
 
 @configclass
 class EventCfg:
-    # Full scene reset
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
     reset_right_arm = EventTerm(
@@ -345,10 +249,8 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[
-                "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
-                "right_shoulder_yaw_joint", "right_elbow_joint",
-                "right_wrist_roll_joint", "right_wrist_pitch_joint",
-                "right_wrist_yaw_joint",
+                "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", 
+                "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
             ]),
             "position_range": (-0.05, 0.05),
             "velocity_range": (0.0, 0.0),
@@ -360,27 +262,22 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[
-                "right_thumb_1_joint", "right_thumb_2_joint",
-                "right_index_1_joint", "right_middle_1_joint",
-                "right_ring_1_joint", "right_little_1_joint",
+                "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint", 
+                "right_middle_1_joint", "right_ring_1_joint", "right_little_1_joint",
             ]),
             "position_range": (-0.05, 0.05),
             "velocity_range": (0.0, 0.0),
         },
     )
 
-    # LEFT arm: frozen at default — zero offset, zero velocity
     freeze_left_arm = EventTerm(
         func=mdp.reset_joints_by_offset,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[
-                "left_shoulder_pitch_joint", "left_shoulder_roll_joint",
-                "left_shoulder_yaw_joint", "left_elbow_joint",
-                "left_wrist_roll_joint", "left_wrist_pitch_joint",
-                "left_wrist_yaw_joint",
-                "left_thumb_1_joint", "left_thumb_2_joint",
-                "left_index_1_joint", "left_middle_1_joint",
+                "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", 
+                "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
+                "left_thumb_1_joint", "left_thumb_2_joint", "left_index_1_joint", "left_middle_1_joint",
                 "left_ring_1_joint", "left_little_1_joint",
             ]),
             "position_range": (0.0, 0.0),
@@ -388,7 +285,6 @@ class EventCfg:
         },
     )
 
-    # Freeze lower body, mimic joints, waist
     freeze_lower_body = EventTerm(
         func=mdp.reset_joints_by_offset,
         mode="reset",
@@ -408,16 +304,14 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[
-                ".*_thumb_3_joint", ".*_thumb_4_joint",
-                ".*_index_2_joint", ".*_middle_2_joint",
-                ".*_ring_2_joint", ".*_little_2_joint",
+                ".*_thumb_3_joint", ".*_thumb_4_joint", ".*_index_2_joint", 
+                ".*_middle_2_joint", ".*_ring_2_joint", ".*_little_2_joint",
             ]),
             "position_range": (0.0, 0.0),
             "velocity_range": (0.0, 0.0),
         },
     )
 
-    # Object: random position on tray
     reset_target_object = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
@@ -445,21 +339,15 @@ class TerminationsCfg:
         func=mdp.joint_pos_out_of_limit,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[
-                # Arm joints only — finger joints have lower=0 which random actions always violate
-                "right_shoulder_pitch_joint",
-                "right_shoulder_roll_joint",
-                "right_shoulder_yaw_joint",
-                "right_elbow_joint",
-                "right_wrist_roll_joint",
-                "right_wrist_pitch_joint",
-                "right_wrist_yaw_joint",
+                "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+                "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
             ]),
         },
     )
 
 
 @configclass
-class G1RightArmLiftEnvCfg(ManagerBasedRLEnvCfg):
+class G1RightArmLiftEnvCfg_V2(ManagerBasedRLEnvCfg):
     scene: SceneCfg = SceneCfg(num_envs=4096, env_spacing=3.0)
     viewer: ViewerCfg = ViewerCfg(
         resolution=(800, 600),
@@ -478,10 +366,9 @@ class G1RightArmLiftEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
         self.sim.physx.bounce_threshold_velocity = 0.2
-        # In __post_init__
-        self.sim.physx.gpu_max_rigid_patch_count = 2 * 5 * 2**15  # halve it from 4 * 5 * 2**15
+        self.sim.physx.gpu_max_rigid_patch_count = 2 * 5 * 2**15 
 
-        # Freeze left hand — high stiffness holds it at reset pose
+        # Freeze left hand
         left_hand_act = copy.deepcopy(self.scene.robot.actuators["left_hand"])
         left_hand_act.stiffness = 10000.0
         left_hand_act.damping = 1000.0
@@ -498,11 +385,11 @@ class G1RightArmLiftEnvCfg(ManagerBasedRLEnvCfg):
 
 
 @configclass
-class G1RightArmLiftEnvCfg_PLAY(G1RightArmLiftEnvCfg):
+class G1RightArmLiftEnvCfg_V2_PLAY(G1RightArmLiftEnvCfg_V2):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 64
 
-# Aliases for backward compatibility with __init__.py
-G1PickEnvCfg = G1RightArmLiftEnvCfg
-G1PickEnvCfg_PLAY = G1RightArmLiftEnvCfg_PLAY
+# Aliases for registering the version in __init__.py
+G1PickEnvCfg = G1RightArmLiftEnvCfg_V2
+G1PickEnvCfg_PLAY = G1RightArmLiftEnvCfg_V2_PLAY
