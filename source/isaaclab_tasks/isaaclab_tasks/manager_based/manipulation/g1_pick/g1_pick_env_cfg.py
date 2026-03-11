@@ -22,8 +22,8 @@ from isaaclab.utils import configclass
 from .robot_cfg import G1_INSPIRE_CFG
 from . import mdp
 
-_OBJ_INIT_Z   = 0.840   # cube resting on tray
-_SUCCESS_Z    = 0.900   # meaningful lift threshold (replaces 0.3)
+_OBJ_INIT_Z   = 0.850   # cube resting on tray
+_SUCCESS_Z    = 0.900   # meaningful lift threshold 
 _DROP_Z       = 0.600   # below this → fell off table → terminate
 
 _RIGHT_TIPS = [
@@ -124,7 +124,7 @@ class SceneCfg(InteractiveSceneCfg):
 
     tray = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Tray",
-        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.4, 0.0, 0.810]),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=[0.4, 0.0, _OBJ_INIT_Z]),
         spawn=sim_utils.CuboidCfg(
             size=(0.4, 0.6, 0.02),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
@@ -136,7 +136,7 @@ class SceneCfg(InteractiveSceneCfg):
     target_object: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/TargetObject",
         spawn=sim_utils.CuboidCfg(
-            size=(0.04, 0.04, 0.04),
+            size=(0.06, 0.06, 0.06),
             physics_material=RigidBodyMaterialCfg(static_friction=1.5, dynamic_friction=1.5),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -169,7 +169,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=1.5,
+        scale=0.3,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
@@ -178,7 +178,7 @@ class ActionsCfg:
             "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint",
             "right_middle_1_joint", "right_ring_1_joint", "right_little_1_joint",
         ],
-        scale=1.0,
+        scale=0.7,
         use_default_offset=True,
     )
 
@@ -335,15 +335,15 @@ class TerminationsCfg:
         },
     )
 
-    joint_limit = DoneTerm(
-        func=mdp.joint_pos_out_of_limit,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=[
-                "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
-                "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
-            ]),
-        },
-    )
+    # joint_limit = DoneTerm(
+    #     func=mdp.joint_pos_out_of_limit,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names=[
+    #             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+    #             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+    #         ]),
+    #     },
+    # )
 
 
 @configclass
