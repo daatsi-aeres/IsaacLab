@@ -189,7 +189,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=1.2,
+        scale=2.5,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
