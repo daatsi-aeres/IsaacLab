@@ -57,57 +57,61 @@ def wuji_monolithic_reward(
     # ==========================================
     # 2. FINGERTIP REWARD (Pull fingers to cube)
     # ==========================================
+    # We want the tips touching the cube center
     dists = torch.linalg.norm(tips_w - object_pos.unsqueeze(1), dim=-1) # (N, 5)
     fingertip_dist_avg = dists.mean(dim=1) # (N,)
     hand_finger_rew = 1.0 - torch.tanh(fingertip_dist_avg / 0.1) 
 
-    # Action Rate Penalty: Punishes the DIFFERENCE between frames (kills vibration)
     actions = env.action_manager.action
-    prev_actions = env.action_manager.prev_action
-    action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
+    action_penalty = torch.sum(actions**2, dim=-1).clamp(min=0.0, max=1.0)
 
     # ==========================================
-    # 3. PALM PRE-GRASP TARGET (Mid-point between thumb & index to cube center)
+    # 3. PALM PRE-GRASP TARGET (Park arm behind cube)
     # ==========================================
-    thumb_pos = tips_w[:, 0, :] 
-    index_pos = tips_w[:, 1, :]
-    
-    middle_point = (thumb_pos + index_pos) / 2.0
-    d_mid_dist = torch.linalg.norm(middle_point - object_pos, dim=-1)
-    middle_point_rew = 1.0 - torch.tanh(d_mid_dist / 0.1)
+    hand_object_pos = object_pos.clone()
+    # The Inspire fingers need room to wrap around the 6cm block.
+    # We park the flat palm 6.5 cm behind and slightly above the block.
+    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.160 
+    hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.040  
+
+    hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
+    hand_object_rew = 1.0 - torch.tanh(hand_object_dist / 0.3)
 
     # ==========================================
-    # 4. LIFT AND GOAL CALCULATIONS
+    # 4. LIFT AND GOAL CALCULATIONS (You missed this part!)
     # ==========================================
+    # Lift logic adapted to G1 heights
     lift_rew = torch.where(object_pos[:, 2] > _SUCCESS_Z, 1.0, 0.0)
     lift_cont_rew = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
     
-    goal_rew = (object_pos[:, 2] > _SUCCESS_Z).float() * (1.0 - torch.tanh(d_mid_dist / 0.3))
+    goal_rew = (object_pos[:, 2] > _SUCCESS_Z).float() * (1.0 - torch.tanh(hand_object_dist / 0.3))
     goal_rew_fine_grained = (object_pos[:, 2] > _SUCCESS_Z).float() * (
-        1.0 - torch.tanh(d_mid_dist / 0.05)
+        1.0 - torch.tanh(hand_object_dist / 0.05)
     )
 
     r_close = 0.1
-    close_bonus = (r_close - d_mid_dist).clamp(min=0.0) / r_close
+    close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
 
     # ==========================================
     # 5. TOTAL REWARD AGGREGATION
     # ==========================================
+    # Total reward (Exact weights + finger closing reward)
     reward = (
-        0.25 * middle_point_rew
+        0.25 * hand_object_rew
         + close_bonus
         + 0.5 * hand_finger_rew 
-        - action_rate_penalty * action_penalty_scale
+        - action_penalty * action_penalty_scale
         + lift_rew * 25.0
         + goal_rew * 16.0
         + goal_rew_fine_grained * 5.0
         + lift_cont_rew * 10.0
-        - 0.005 # Alive penalty
+        - 0.005 # Alive penalty to encourage speed
     )
 
     # ==========================================
-    # 6. TERMINAL FAILURE PENALTY
+    # 6. TERMINAL FAILURE PENALTY (You missed this too!)
     # ==========================================
+    # If it knocks the cube off the tray, hit it with a massive -5.0
     resets = torch.where(
         obj.data.root_pos_w[:, 2] < _DROP_Z,
         torch.ones_like(reward),
@@ -185,7 +189,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=1.5,
+        scale=2.5,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
@@ -220,7 +224,6 @@ class ObservationsCfg:
                 "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint", "right_middle_1_joint",
                 "right_ring_1_joint", "right_little_1_joint",
             ])},
-            clip=(-50.0, 50.0),
         )
         object_pos_b = ObsTerm(
             func=mdp.target_object_position_b,
@@ -229,7 +232,6 @@ class ObservationsCfg:
         object_vel = ObsTerm(
             func=mdp.object_root_velocity,
             params={"object_cfg": SceneEntityCfg("target_object")},
-            clip=(-50.0, 50.0),
         )
         right_fingertip_pos = ObsTerm(
             func=mdp.fingertip_positions_b,
