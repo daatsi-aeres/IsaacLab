@@ -255,7 +255,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_penalty_scale": 0.01,
+            "action_penalty_scale": 0.0,
         },
     )
 

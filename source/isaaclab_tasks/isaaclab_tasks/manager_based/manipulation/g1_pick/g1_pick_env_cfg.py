@@ -66,35 +66,36 @@ def wuji_monolithic_reward(
     prev_actions = env.action_manager.prev_action
     action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
 
+# ==========================================
+    # 3. PALM PRE-GRASP TARGET (The Pincer Move is Back)
     # ==========================================
-    # 3. PALM PRE-GRASP TARGET (Mid-point between thumb & index to cube center)
-    # ==========================================
-    thumb_pos = tips_w[:, 0, :] 
-    index_pos = tips_w[:, 1, :]
-    
-    middle_point = (thumb_pos + index_pos) / 2.0
-    d_mid_dist = torch.linalg.norm(middle_point - object_pos, dim=-1)
-    middle_point_rew = 1.0 - torch.tanh(d_mid_dist / 0.1)
+    hand_object_pos = object_pos.clone()
+    # The Inspire fingers need room to wrap around the 6cm block.
+    # We park the flat palm 16 cm behind and slightly above the block.
+    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.160 
+    hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.040  
 
+    hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
+    hand_object_rew = 1.0 - torch.tanh(hand_object_dist / 0.3)
     # ==========================================
     # 4. LIFT AND GOAL CALCULATIONS
     # ==========================================
     lift_rew = torch.where(object_pos[:, 2] > _SUCCESS_Z, 1.0, 0.0)
     lift_cont_rew = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
     
-    goal_rew = (object_pos[:, 2] > _SUCCESS_Z).float() * (1.0 - torch.tanh(d_mid_dist / 0.3))
+    goal_rew = (object_pos[:, 2] > _SUCCESS_Z).float() * (1.0 - torch.tanh(hand_object_dist / 0.3))
     goal_rew_fine_grained = (object_pos[:, 2] > _SUCCESS_Z).float() * (
-        1.0 - torch.tanh(d_mid_dist / 0.05)
+        1.0 - torch.tanh(hand_object_dist / 0.05)
     )
 
     r_close = 0.1
-    close_bonus = (r_close - d_mid_dist).clamp(min=0.0) / r_close
+    close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
 
     # ==========================================
     # 5. TOTAL REWARD AGGREGATION
     # ==========================================
     reward = (
-        0.25 * middle_point_rew
+        0.25 * hand_object_rew
         + close_bonus
         + 0.5 * hand_finger_rew 
         - action_rate_penalty * action_penalty_scale
@@ -185,7 +186,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=1.5,
+        scale=2.5,
         use_default_offset=True,
     )
     right_hand_action = mdp.JointPositionActionCfg(
@@ -194,7 +195,7 @@ class ActionsCfg:
             "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint",
             "right_middle_1_joint", "right_ring_1_joint", "right_little_1_joint",
         ],
-        scale=1.0,
+        scale=1.5,
         use_default_offset=True,
     )
 
@@ -253,7 +254,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_penalty_scale": 0.01,
+            "action_penalty_scale": 0.0001,
         },
     )
 
