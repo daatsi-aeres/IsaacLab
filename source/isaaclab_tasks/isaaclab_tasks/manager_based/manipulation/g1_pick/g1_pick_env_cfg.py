@@ -102,7 +102,7 @@ def wuji_monolithic_reward(
         + lift_rew * 25.0
         + goal_rew * 16.0
         + goal_rew_fine_grained * 5.0
-        + lift_cont_rew * 10.0
+        + lift_cont_rew * 20.0
         - 0.005 # Alive penalty
     )
 
@@ -254,7 +254,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_penalty_scale": 0.0001,
+            "action_penalty_scale": 0.001,
         },
     )
 
