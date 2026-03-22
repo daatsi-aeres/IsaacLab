@@ -19,7 +19,8 @@ from isaaclab.sim import CuboidCfg, RigidBodyMaterialCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab.utils import configclass
 
-from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction, JointPositionActionCfg
+from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
+from isaaclab.envs.mdp.actions.actions_cfg import JointPositionActionCfg
 
 from .robot_cfg import G1_INSPIRE_CFG
 from . import mdp
@@ -246,7 +247,7 @@ class ActionsCfg:
             "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint",
             "right_middle_1_joint", "right_ring_1_joint", "right_little_1_joint",
         ],
-        scale=0.9,
+        scale=1.0,
         use_default_offset=True,
     )
 
