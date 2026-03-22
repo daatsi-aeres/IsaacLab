@@ -19,6 +19,8 @@ from isaaclab.sim import CuboidCfg, RigidBodyMaterialCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg
 from isaaclab.utils import configclass
 
+from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction, JointPositionActionCfg
+
 from .robot_cfg import G1_INSPIRE_CFG
 from . import mdp
 
@@ -177,6 +179,54 @@ class SceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(intensity=3000.0),
     )
 
+class InspireMimicAction(JointPositionAction):
+    def __init__(self, cfg: JointPositionActionCfg, env):
+        super().__init__(cfg, env)
+        
+        # Helper function to safely extract the integer joint index from the asset
+        def get_idx(joint_name):
+            return self._asset.find_joints(joint_name)[0][0]
+
+        # 1. Get indices of the primary joints (driven by the policy)
+        self.src_thumb_2 = get_idx("right_thumb_2_joint")
+        self.src_idx_1 = get_idx("right_index_1_joint")
+        self.src_mid_1 = get_idx("right_middle_1_joint")
+        self.src_rng_1 = get_idx("right_ring_1_joint")
+        self.src_lit_1 = get_idx("right_little_1_joint")
+
+        # 2. Get indices of the mimic joints (driven by our multipliers)
+        self.mimic_joint_indices = [
+            get_idx("right_thumb_3_joint"),
+            get_idx("right_thumb_4_joint"),
+            get_idx("right_index_2_joint"),
+            get_idx("right_middle_2_joint"),
+            get_idx("right_ring_2_joint"),
+            get_idx("right_little_2_joint")
+        ]
+
+    def apply_actions(self):
+        # 1. Apply the standard RL policy actions to the 6 primary joints
+        super().apply_actions()
+        
+        # 2. Grab the updated joint position targets for the entire robot
+        targets = self._asset.data.joint_pos_target.clone()
+        
+        # 3. Compute the distal joint targets using the URDF multipliers.
+        # .unsqueeze(1) shapes the 1D tensor to (num_envs, 1) for concatenation
+        t3 = (targets[:, self.src_thumb_2] * 0.8024).unsqueeze(1)
+        t4 = t3 * 0.9487 
+        i2 = (targets[:, self.src_idx_1] * 1.0843).unsqueeze(1)
+        m2 = (targets[:, self.src_mid_1] * 1.0843).unsqueeze(1)
+        r2 = (targets[:, self.src_rng_1] * 1.0843).unsqueeze(1)
+        l2 = (targets[:, self.src_lit_1] * 1.0843).unsqueeze(1)
+        
+        # 4. Concatenate and apply the mimic targets to the physics solver
+        mimic_targets = torch.cat([t3, t4, i2, m2, r2, l2], dim=1)
+        self._asset.set_joint_position_target(mimic_targets, joint_ids=self.mimic_joint_indices)
+
+@configclass
+class InspireMimicActionCfg(JointPositionActionCfg):
+    class_type: type = InspireMimicAction
 
 @configclass
 class ActionsCfg:
@@ -189,13 +239,14 @@ class ActionsCfg:
         scale=2.5,
         use_default_offset=True,
     )
-    right_hand_action = mdp.JointPositionActionCfg(
+    # Use the new custom Action Config here:
+    right_hand_action = InspireMimicActionCfg(
         asset_name="robot",
         joint_names=[
             "right_thumb_1_joint", "right_thumb_2_joint", "right_index_1_joint",
             "right_middle_1_joint", "right_ring_1_joint", "right_little_1_joint",
         ],
-        scale=1.5,
+        scale=0.9,
         use_default_offset=True,
     )
 
@@ -318,18 +369,18 @@ class EventCfg:
         },
     )
 
-    freeze_mimic_joints = EventTerm(
-        func=mdp.reset_joints_by_offset,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=[
-                ".*_thumb_3_joint", ".*_thumb_4_joint", ".*_index_2_joint", 
-                ".*_middle_2_joint", ".*_ring_2_joint", ".*_little_2_joint",
-            ]),
-            "position_range": (0.0, 0.0),
-            "velocity_range": (0.0, 0.0),
-        },
-    )
+    # freeze_mimic_joints = EventTerm(
+    #     func=mdp.reset_joints_by_offset,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names=[
+    #             ".*_thumb_3_joint", ".*_thumb_4_joint", ".*_index_2_joint", 
+    #             ".*_middle_2_joint", ".*_ring_2_joint", ".*_little_2_joint",
+    #         ]),
+    #         "position_range": (0.0, 0.0),
+    #         "velocity_range": (0.0, 0.0),
+    #     },
+    # )
 
     reset_target_object = EventTerm(
         func=mdp.reset_root_state_uniform,

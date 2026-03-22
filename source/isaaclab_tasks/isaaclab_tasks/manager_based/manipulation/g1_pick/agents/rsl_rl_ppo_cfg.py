@@ -11,11 +11,11 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 @configclass
 class G1PickPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 128
-    max_iterations = 30000
+    max_iterations = 10000
     save_interval = 150
     experiment_name = "g1_pick"
     policy = RslRlPpoActorCriticCfg(
-        init_noise_std=0.8,
+        init_noise_std=1.0,
         actor_obs_normalization=True,
         critic_obs_normalization=True,
         actor_hidden_dims=[512, 256, 128],  # correct for 63-dim obs
