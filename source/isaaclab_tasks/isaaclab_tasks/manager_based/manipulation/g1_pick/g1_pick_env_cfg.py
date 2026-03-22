@@ -105,7 +105,7 @@ def wuji_monolithic_reward(
         + lift_rew * 25.0
         + goal_rew * 16.0
         + goal_rew_fine_grained * 5.0
-        + lift_cont_rew * 10.0
+        + lift_cont_rew * 80.0
         - 0.005 # Alive penalty
     )
 
