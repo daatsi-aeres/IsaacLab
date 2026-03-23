@@ -500,7 +500,14 @@ class G1RightArmLiftEnvCfg_V2(ManagerBasedRLEnvCfg):
         self.sim.dt = 1 / 120
         self.sim.render_interval = self.decimation
         self.sim.physx.bounce_threshold_velocity = 0.2
-        self.sim.physx.gpu_max_rigid_patch_count = 2 * 5 * 2**15 
+        
+        # --- INCREASED PHYSX BUFFERS FOR 7000 ENVS ---
+        # Increased patch count to ~1.3 million to safely cover the 399k requirement
+        self.sim.physx.gpu_max_rigid_patch_count = 20 * 2**16  
+        # Bumped contact and pair capacities to prevent secondary memory overflows
+        self.sim.physx.gpu_max_contact_capacity = 2**24        
+        self.sim.physx.gpu_found_lost_pairs_capacity = 2**21   
+        # ---------------------------------------------
 
         # Freeze left hand
         left_hand_act = copy.deepcopy(self.scene.robot.actuators["left_hand"])
