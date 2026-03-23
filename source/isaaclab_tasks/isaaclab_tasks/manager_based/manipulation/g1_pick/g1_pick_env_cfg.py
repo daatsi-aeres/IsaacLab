@@ -77,52 +77,59 @@ def wuji_monolithic_reward(
     object_pos = obj.data.root_pos_w.clone()
     
     # ==========================================
-    # 1. GS Representation: Distance to Object (d_pos)
+    # 1. GS Representation (r_pos)
     # ==========================================
     link_pos = robot.data.body_pos_w[:, robot_cfg.body_ids] # 11 links
-    dists_to_obj = torch.linalg.norm(link_pos - object_pos.unsqueeze(1), dim=-1) # (N, 11)
-    avg_d_pos = dists_to_obj.mean(dim=1) # Mean distance of all 11 links to object
-    
-    # r_pos formula from the paper (Eq. 5)
-    alpha_pos = 15.0
-    r_pos = torch.exp(-alpha_pos * avg_d_pos) 
+    dists_to_obj = torch.linalg.norm(link_pos - object_pos.unsqueeze(1), dim=-1)
+    avg_d_pos = dists_to_obj.mean(dim=1)
+    r_pos = torch.exp(-15.0 * avg_d_pos) 
 
     # ==========================================
-    # 2. Virtual Pinch Center (d_mid)
+    # 2. Palm Alignment (The Loophole Fix)
     # ==========================================
-    # body_ids[2] is right_thumb_4 (tip), body_ids[4] is right_index_2 (tip)
+    palm_pos = link_pos[:, 0, :] # Index 0 is right_wrist_yaw_link
+    palm_target = object_pos.clone()
+    # The palm should hover ~6cm above the center of the 6cm block
+    palm_target[:, 2] = palm_target[:, 2] + 0.06 
+    
+    palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
+    # Generates a strict multiplier: 1.0 if perfectly aligned, drops to 0.0 quickly if far
+    palm_alignment_multiplier = torch.exp(-20.0 * palm_dist)
+
+    # ==========================================
+    # 3. Virtual Pinch Center (d_mid)
+    # ==========================================
     thumb_tip = link_pos[:, 2, :]
     index_tip = link_pos[:, 4, :]
     mid_point = (thumb_tip + index_tip) / 2.0
-    
     d_mid = torch.linalg.norm(mid_point - object_pos, dim=-1)
+    
+    # GATED PINCH: You only get pinch points IF your palm is correctly positioned!
+    raw_pinch_rew = torch.exp(-25.0 * d_mid)
+    gated_pinch_rew = raw_pinch_rew * palm_alignment_multiplier
 
     # ==========================================
-    # 3. Grasping & Goal Reward (Eq. 8)
+    # 4. Grasping & Goal Reward 
     # ==========================================
-    # Define the goal position directly above the start (Lift task)
     p_goal = object_pos.clone()
     p_goal[:, 2] = _SUCCESS_Z 
     dist_to_goal = torch.linalg.norm(object_pos - p_goal, dim=-1)
 
-    c5 = 10.0
-    c6 = 2.0
-    alpha_mid = 25.0
-    
-    # r_grasp formula from the paper (Eq. 8)
-    # Note: 0.2 is the distance threshold in the paper. We clamp it so it doesn't go deeply negative.
     goal_progress = (0.2 - dist_to_goal).clamp(min=0.0) 
-    r_grasp = (c5 * goal_progress) + (c6 * torch.exp(-alpha_mid * d_mid))
-
-    # ==========================================
-    # 4. Total Stage 1 Reward (Eq. 9)
-    # ==========================================
-    c1 = 1.0  # Grasp weight
-    c2 = 0.5  # Position weight (lowered slightly so pinch dominates)
     
-    r_stage1 = (c1 * r_grasp) + (c2 * r_pos)
+    # We bring back the 100.0x continuous lift reward so it aggressively pulls upward
+    lift_height = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
+    lift_cont_rew = lift_height * 100.0
 
-    # Action Rate Penalty (Keep this to prevent violent shaking)
+    # r_grasp now includes the gated pinch and the aggressive lift
+    r_grasp = (10.0 * goal_progress) + (2.0 * gated_pinch_rew) + lift_cont_rew
+
+    # ==========================================
+    # 5. Total Stage 1 Reward
+    # ==========================================
+    r_stage1 = (1.0 * r_grasp) + (0.5 * r_pos)
+
+    # Action Rate Penalty 
     actions = env.action_manager.action
     prev_actions = env.action_manager.prev_action
     action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
@@ -130,7 +137,7 @@ def wuji_monolithic_reward(
     reward = r_stage1 - (action_rate_penalty * action_penalty_scale) - 0.005
 
     # ==========================================
-    # 5. Drop Penalty
+    # 6. Drop Penalty
     # ==========================================
     resets = torch.where(
         obj.data.root_pos_w[:, 2] < _DROP_Z,
