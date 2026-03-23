@@ -29,14 +29,41 @@ _OBJ_INIT_Z   = 0.850   # cube resting on tray
 _SUCCESS_Z    = 0.950   # meaningful lift threshold 
 _DROP_Z       = 0.600   # below this → fell off table → terminate
 
+# _RIGHT_HAND_BODIES = [
+#     "right_wrist_yaw_link", # Index 0: The rigid palm center
+#     "right_thumb_4",           # Index 1: Tip
+#     "right_index_2",           # Index 2: Tip
+#     "right_middle_2",          # Index 3: Tip
+#     "right_ring_2",            # Index 4: Tip
+#     "right_little_2",          # Index 5: Tip
+# ]
+
 _RIGHT_HAND_BODIES = [
-    "right_wrist_yaw_link", # Index 0: The rigid palm center
-    "right_thumb_4",           # Index 1: Tip
-    "right_index_2",           # Index 2: Tip
-    "right_middle_2",          # Index 3: Tip
-    "right_ring_2",            # Index 4: Tip
-    "right_little_2",          # Index 5: Tip
+    "right_wrist_yaw_link", # Palm
+    "right_thumb_1", "right_thumb_4",   # Thumb base & tip
+    "right_index_1", "right_index_2",   # Index base & tip
+    "right_middle_1", "right_middle_2", # Middle base & tip
+    "right_ring_1", "right_ring_2",     # Ring base & tip
+    "right_little_1", "right_little_2"  # Little base & tip
 ]
+
+def gs_distance_features(env: ManagerBasedRLEnv, robot_cfg: SceneEntityCfg, object_cfg: SceneEntityCfg) -> torch.Tensor:
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+    
+    link_pos = robot.data.body_pos_w[:, robot_cfg.body_ids] # (N, 11, 3)
+    obj_pos = obj.data.root_pos_w.unsqueeze(1) # (N, 1, 3)
+    
+    # Approximate nearest surface point on a 6cm cube (0.03m half-extents)
+    local_link_pos = link_pos - obj_pos
+    clamped_local = torch.clamp(local_link_pos, min=-0.03, max=0.03)
+    nearest_surface_pt = obj_pos + clamped_local
+    
+    # Vector from link to nearest object surface point
+    d_pos_vec = nearest_surface_pt - link_pos # (N, 11, 3)
+    
+    # Flatten to (N, 33) as required by the MLP observation space
+    return d_pos_vec.view(env.num_envs, -1)
 
 def wuji_monolithic_reward(
     env: ManagerBasedRLEnv,
@@ -48,69 +75,62 @@ def wuji_monolithic_reward(
     obj: RigidObject = env.scene[object_cfg.name]
 
     object_pos = obj.data.root_pos_w.clone()
-    object_pos[:, 2] = object_pos[:, 2] - 0.03 # Shift to tray surface
+    
+    # ==========================================
+    # 1. GS Representation: Distance to Object (d_pos)
+    # ==========================================
+    link_pos = robot.data.body_pos_w[:, robot_cfg.body_ids] # 11 links
+    dists_to_obj = torch.linalg.norm(link_pos - object_pos.unsqueeze(1), dim=-1) # (N, 11)
+    avg_d_pos = dists_to_obj.mean(dim=1) # Mean distance of all 11 links to object
+    
+    # r_pos formula from the paper (Eq. 5)
+    alpha_pos = 15.0
+    r_pos = torch.exp(-alpha_pos * avg_d_pos) 
 
     # ==========================================
-    # 1. EXTRACT SEPARATE HAND AND TIP POSITIONS
+    # 2. Virtual Pinch Center (d_mid)
     # ==========================================
-    # Index 0 is the palm sensor, Indices 1-5 are the fingertips
-    hand_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]] # (N, 3)
-    tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]  # (N, 5, 3)
+    # body_ids[2] is right_thumb_4 (tip), body_ids[4] is right_index_2 (tip)
+    thumb_tip = link_pos[:, 2, :]
+    index_tip = link_pos[:, 4, :]
+    mid_point = (thumb_tip + index_tip) / 2.0
+    
+    d_mid = torch.linalg.norm(mid_point - object_pos, dim=-1)
 
     # ==========================================
-    # 2. FINGERTIP REWARD (Pull fingers to cube)
+    # 3. Grasping & Goal Reward (Eq. 8)
     # ==========================================
-    dists = torch.linalg.norm(tips_w - object_pos.unsqueeze(1), dim=-1) # (N, 5)
-    fingertip_dist_avg = dists.mean(dim=1) # (N,)
-    hand_finger_rew = 1.0 - torch.tanh(fingertip_dist_avg / 0.1) 
+    # Define the goal position directly above the start (Lift task)
+    p_goal = object_pos.clone()
+    p_goal[:, 2] = _SUCCESS_Z 
+    dist_to_goal = torch.linalg.norm(object_pos - p_goal, dim=-1)
 
-    # Action Rate Penalty: Punishes the DIFFERENCE between frames (kills vibration)
+    c5 = 10.0
+    c6 = 2.0
+    alpha_mid = 25.0
+    
+    # r_grasp formula from the paper (Eq. 8)
+    # Note: 0.2 is the distance threshold in the paper. We clamp it so it doesn't go deeply negative.
+    goal_progress = (0.2 - dist_to_goal).clamp(min=0.0) 
+    r_grasp = (c5 * goal_progress) + (c6 * torch.exp(-alpha_mid * d_mid))
+
+    # ==========================================
+    # 4. Total Stage 1 Reward (Eq. 9)
+    # ==========================================
+    c1 = 1.0  # Grasp weight
+    c2 = 0.5  # Position weight (lowered slightly so pinch dominates)
+    
+    r_stage1 = (c1 * r_grasp) + (c2 * r_pos)
+
+    # Action Rate Penalty (Keep this to prevent violent shaking)
     actions = env.action_manager.action
     prev_actions = env.action_manager.prev_action
     action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
-
-# ==========================================
-    # 3. PALM PRE-GRASP TARGET (The Pincer Move is Back)
-    # ==========================================
-    hand_object_pos = object_pos.clone()
-    # The Inspire fingers need room to wrap around the 6cm block.
-    # We park the flat palm 16 cm behind and slightly above the block.
-    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.160 
-    hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.040  
-
-    hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
-    hand_object_rew = 1.0 - torch.tanh(hand_object_dist / 0.3)
-    # ==========================================
-    # 4. LIFT AND GOAL CALCULATIONS
-    # ==========================================
-    lift_rew = torch.where(object_pos[:, 2] > _SUCCESS_Z, 1.0, 0.0)
-    lift_cont_rew = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
     
-    goal_rew = (object_pos[:, 2] > _SUCCESS_Z).float() * (1.0 - torch.tanh(hand_object_dist / 0.3))
-    goal_rew_fine_grained = (object_pos[:, 2] > _SUCCESS_Z).float() * (
-        1.0 - torch.tanh(hand_object_dist / 0.05)
-    )
-
-    r_close = 0.1
-    close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
+    reward = r_stage1 - (action_rate_penalty * action_penalty_scale) - 0.005
 
     # ==========================================
-    # 5. TOTAL REWARD AGGREGATION
-    # ==========================================
-    reward = (
-        0.25 * hand_object_rew
-        + close_bonus
-        + 0.5 * hand_finger_rew 
-        - action_rate_penalty * action_penalty_scale
-        + lift_rew * 25.0
-        + goal_rew * 16.0
-        + goal_rew_fine_grained * 5.0
-        + lift_cont_rew * 80.0
-        - 0.005 # Alive penalty
-    )
-
-    # ==========================================
-    # 6. TERMINAL FAILURE PENALTY
+    # 5. Drop Penalty
     # ==========================================
     resets = torch.where(
         obj.data.root_pos_w[:, 2] < _DROP_Z,
@@ -120,7 +140,6 @@ def wuji_monolithic_reward(
     reward = torch.where(resets == 1, torch.ones_like(reward) * -5.0, reward)
 
     return reward
-
 
 # ==========================================
 # CONFIGURATIONS
@@ -181,21 +200,31 @@ class SceneCfg(InteractiveSceneCfg):
     )
 
 class InspireMimicAction(JointPositionAction):
-    def __init__(self, cfg: JointPositionActionCfg, env):
+    def __init__(self, cfg: JointPositionActionCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
+        self._env = env # Store env reference to access object position
         
-        # Helper function to safely extract the integer joint index from the asset
         def get_idx(joint_name):
             return self._asset.find_joints(joint_name)[0][0]
 
-        # 1. Get indices of the primary joints (driven by the policy)
+        # 1. Primary joints (driven by policy)
+        self.primary_finger_indices = [
+            get_idx("right_thumb_1_joint"),
+            get_idx("right_thumb_2_joint"),
+            get_idx("right_index_1_joint"),
+            get_idx("right_middle_1_joint"),
+            get_idx("right_ring_1_joint"),
+            get_idx("right_little_1_joint")
+        ]
+
+        # We need these specifically for the mimic math
         self.src_thumb_2 = get_idx("right_thumb_2_joint")
         self.src_idx_1 = get_idx("right_index_1_joint")
         self.src_mid_1 = get_idx("right_middle_1_joint")
         self.src_rng_1 = get_idx("right_ring_1_joint")
         self.src_lit_1 = get_idx("right_little_1_joint")
 
-        # 2. Get indices of the mimic joints (driven by our multipliers)
+        # 2. Mimic joints
         self.mimic_joint_indices = [
             get_idx("right_thumb_3_joint"),
             get_idx("right_thumb_4_joint"),
@@ -204,26 +233,43 @@ class InspireMimicAction(JointPositionAction):
             get_idx("right_ring_2_joint"),
             get_idx("right_little_2_joint")
         ]
+        
+        # 3. Palm body index for distance checking
+        self.palm_body_idx = self._asset.find_bodies("right_wrist_yaw_link")[0][0]
 
     def apply_actions(self):
-        # 1. Apply the standard RL policy actions to the 6 primary joints
-        super().apply_actions()
-        
-        # 2. Grab the updated joint position targets for the entire robot
-        targets = self._asset.data.joint_pos_target.clone()
-        
-        # 3. Compute the distal joint targets using the URDF multipliers.
-        # .unsqueeze(1) shapes the 1D tensor to (num_envs, 1) for concatenation
-        t3 = (targets[:, self.src_thumb_2] * 0.8024).unsqueeze(1)
-        t4 = t3 * 0.9487 
-        i2 = (targets[:, self.src_idx_1] * 1.0843).unsqueeze(1)
-        m2 = (targets[:, self.src_mid_1] * 1.0843).unsqueeze(1)
-        r2 = (targets[:, self.src_rng_1] * 1.0843).unsqueeze(1)
-        l2 = (targets[:, self.src_lit_1] * 1.0843).unsqueeze(1)
-        
-        # 4. Concatenate and apply the mimic targets to the physics solver
-        mimic_targets = torch.cat([t3, t4, i2, m2, r2, l2], dim=1)
-        self._asset.set_joint_position_target(mimic_targets, joint_ids=self.mimic_joint_indices)
+            # 1. Apply the standard RL policy actions to the 6 primary joints
+            super().apply_actions()
+            
+            # 2. Coarse-to-Fine Masking: Check distance from palm to object
+            palm_pos = self._asset.data.body_pos_w[:, self.palm_body_idx]
+            obj_pos = self._env.scene["target_object"].data.root_pos_w
+            dist_to_obj = torch.linalg.norm(palm_pos - obj_pos, dim=-1)
+            
+            targets = self._asset.data.joint_pos_target.clone()
+            
+            # If distance > 0.08m, freeze fingers in an open state (0.0 radians)
+            mask = dist_to_obj > 0.08
+            for idx in self.primary_finger_indices:
+                targets[mask, idx] = 0.0 
+                
+            # Apply the masked targets back to the primary joints (FIXED SHAPE MISMATCH HERE)
+            self._asset.set_joint_position_target(
+                targets[:, self.primary_finger_indices], 
+                joint_ids=self.primary_finger_indices
+            )
+
+            # 3. Compute and apply mimic targets based on the (potentially masked) primary targets
+            t3 = (targets[:, self.src_thumb_2] * 0.8024).unsqueeze(1)
+            t4 = t3 * 0.9487 
+            i2 = (targets[:, self.src_idx_1] * 1.0843).unsqueeze(1)
+            m2 = (targets[:, self.src_mid_1] * 1.0843).unsqueeze(1)
+            r2 = (targets[:, self.src_rng_1] * 1.0843).unsqueeze(1)
+            l2 = (targets[:, self.src_lit_1] * 1.0843).unsqueeze(1)
+            
+            # 4. Concatenate and apply the mimic targets to the physics solver
+            mimic_targets = torch.cat([t3, t4, i2, m2, r2, l2], dim=1)
+            self._asset.set_joint_position_target(mimic_targets, joint_ids=self.mimic_joint_indices)
 
 @configclass
 class InspireMimicActionCfg(JointPositionActionCfg):
@@ -284,9 +330,10 @@ class ObservationsCfg:
             params={"object_cfg": SceneEntityCfg("target_object")},
             clip=(-50.0, 50.0),
         )
-        right_fingertip_pos = ObsTerm(
-            func=mdp.fingertip_positions_b,
-            params={"robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES)},
+        gs_features = ObsTerm(
+            func=gs_distance_features,
+            params={"robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES), 
+                    "object_cfg": SceneEntityCfg("target_object")},
         )
         actions = ObsTerm(func=mdp.last_action)
 
