@@ -75,69 +75,78 @@ def wuji_monolithic_reward(
     obj: RigidObject = env.scene[object_cfg.name]
 
     object_pos = obj.data.root_pos_w.clone()
-    
+    object_pos[:, 2] = object_pos[:, 2] - 0.03 # Shift to tray surface
+
     # ==========================================
-    # 1. GS Representation (r_pos)
+    # 1. NATURAL PALM ALIGNMENT (Fixes the off-center grasp)
     # ==========================================
     link_pos = robot.data.body_pos_w[:, robot_cfg.body_ids] # 11 links
-    dists_to_obj = torch.linalg.norm(link_pos - object_pos.unsqueeze(1), dim=-1)
-    avg_d_pos = dists_to_obj.mean(dim=1)
-    r_pos = torch.exp(-15.0 * avg_d_pos) 
-
-    # ==========================================
-    # 2. Palm Alignment (The Loophole Fix)
-    # ==========================================
-    palm_pos = link_pos[:, 0, :] # Index 0 is right_wrist_yaw_link
-    palm_target = object_pos.clone()
-    # The palm should hover ~6cm above the center of the 6cm block
-    palm_target[:, 2] = palm_target[:, 2] + 0.06 
+    hand_pos = link_pos[:, 0, :] # Index 0 is right_wrist_yaw_link
     
-    palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
-    # Generates a strict multiplier: 1.0 if perfectly aligned, drops to 0.0 quickly if far
-    palm_alignment_multiplier = torch.exp(-20.0 * palm_dist)
+    # Instead of a rigid X/Z offset, we calculate pure 3D distance.
+    palm_to_obj_dist = torch.linalg.norm(hand_pos - object_pos, dim=-1)
+    
+    # The Inspire wrist naturally sits ~12cm from the pinch center during a deep grasp.
+    # We penalize the palm for being too far away OR too close (knuckle brush).
+    palm_dist_error = torch.abs(palm_to_obj_dist - 0.12)
+    
+    hand_object_rew = 1.0 - torch.tanh(palm_dist_error / 0.1)
+    
+    r_close = 0.1
+    close_bonus = (r_close - palm_dist_error).clamp(min=0.0) / r_close
 
     # ==========================================
-    # 3. Virtual Pinch Center (d_mid)
+    # 2. GATED VIRTUAL PINCH 
     # ==========================================
     thumb_tip = link_pos[:, 2, :]
     index_tip = link_pos[:, 4, :]
     mid_point = (thumb_tip + index_tip) / 2.0
     d_mid = torch.linalg.norm(mid_point - object_pos, dim=-1)
     
-    # GATED PINCH: You only get pinch points IF your palm is correctly positioned!
-    raw_pinch_rew = torch.exp(-25.0 * d_mid)
-    gated_pinch_rew = raw_pinch_rew * palm_alignment_multiplier
+    # Gate the pinch using the new natural palm alignment
+    palm_alignment_multiplier = torch.exp(-15.0 * palm_dist_error)
+    gated_pinch_rew = torch.exp(-25.0 * d_mid) * palm_alignment_multiplier
 
-    # ==========================================
-    # 4. Grasping & Goal Reward 
-    # ==========================================
-    p_goal = object_pos.clone()
-    p_goal[:, 2] = _SUCCESS_Z 
-    dist_to_goal = torch.linalg.norm(object_pos - p_goal, dim=-1)
-
-    goal_progress = (0.2 - dist_to_goal).clamp(min=0.0) 
-    
-    # We bring back the 100.0x continuous lift reward so it aggressively pulls upward
-    lift_height = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
-    lift_cont_rew = lift_height * 100.0
-
-    # r_grasp now includes the gated pinch and the aggressive lift
-    r_grasp = (10.0 * goal_progress) + (2.0 * gated_pinch_rew) + lift_cont_rew
-
-    # ==========================================
-    # 5. Total Stage 1 Reward
-    # ==========================================
-    r_stage1 = (1.0 * r_grasp) + (0.5 * r_pos)
-
-    # Action Rate Penalty 
+    # Action Rate Penalty
     actions = env.action_manager.action
     prev_actions = env.action_manager.prev_action
     action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
-    
-    reward = r_stage1 - (action_rate_penalty * action_penalty_scale) - 0.005
 
     # ==========================================
-    # 6. Drop Penalty
+    # 3. LIFT AND GOAL CALCULATIONS
+    # ==========================================
+    success = (object_pos[:, 2] > _SUCCESS_Z).float()
+    lift_rew = torch.where(success == 1.0, 1.0, 0.0)
+    
+    lift_height = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
+    lift_cont_rew = lift_height * 80.0 
+    
+    goal_rew = success * (1.0 - torch.tanh(palm_dist_error / 0.1))
+    goal_rew_fine_grained = success * (1.0 - torch.tanh(palm_dist_error / 0.05))
+
+    # ==========================================
+    # 4. PHASE DECAY (Kills the "Prop Up" exploit)
+    # ==========================================
+    # If the cube is lifted/tilted more than 1.5cm, slash the hovering rewards by 80%.
+    # The policy can no longer safely farm points by propping the cube up.
+    is_lifted = lift_height > 0.015
+    reach_decay = torch.where(is_lifted, 0.2, 1.0)
+
+    # ==========================================
+    # 5. TOTAL REWARD AGGREGATION
+    # ==========================================
+    reward = (
+        (0.25 * hand_object_rew + close_bonus + 0.5 * gated_pinch_rew) * reach_decay
+        - action_rate_penalty * action_penalty_scale
+        + lift_rew * 25.0
+        + goal_rew * 16.0
+        + goal_rew_fine_grained * 5.0
+        + lift_cont_rew 
+        - 0.005 # Alive penalty
+    )
+
+    # ==========================================
+    # 6. TERMINAL FAILURE PENALTY
     # ==========================================
     resets = torch.where(
         obj.data.root_pos_w[:, 2] < _DROP_Z,
@@ -147,7 +156,7 @@ def wuji_monolithic_reward(
     reward = torch.where(resets == 1, torch.ones_like(reward) * -5.0, reward)
 
     return reward
-
+    
 # ==========================================
 # CONFIGURATIONS
 # ==========================================
