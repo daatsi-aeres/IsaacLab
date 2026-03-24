@@ -78,76 +78,61 @@ def wuji_monolithic_reward(
     object_pos[:, 2] = object_pos[:, 2] - 0.03 # Shift to tray surface
 
     # ==========================================
-    # 1. NATURAL PALM ALIGNMENT (Fixes the off-center grasp)
+    # 1. EXTRACT SEPARATE HAND AND TIP POSITIONS (Fixed for 11 links)
     # ==========================================
-    link_pos = robot.data.body_pos_w[:, robot_cfg.body_ids] # 11 links
-    hand_pos = link_pos[:, 0, :] # Index 0 is right_wrist_yaw_link
-    
-    # Instead of a rigid X/Z offset, we calculate pure 3D distance.
-    palm_to_obj_dist = torch.linalg.norm(hand_pos - object_pos, dim=-1)
-    
-    # The Inspire wrist naturally sits ~12cm from the pinch center during a deep grasp.
-    # We penalize the palm for being too far away OR too close (knuckle brush).
-    palm_dist_error = torch.abs(palm_to_obj_dist - 0.12)
-    
-    hand_object_rew = 1.0 - torch.tanh(palm_dist_error / 0.1)
-    
-    r_close = 0.1
-    close_bonus = (r_close - palm_dist_error).clamp(min=0.0) / r_close
+    link_pos = robot.data.body_pos_w[:, robot_cfg.body_ids] 
+    hand_pos = link_pos[:, 0, :] # Index 0 is palm
+    # We grab indices 2, 4, 6, 8, 10 to isolate JUST the fingertips from the 11 links
+    tips_w = link_pos[:, [2, 4, 6, 8, 10], :]  
 
     # ==========================================
-    # 2. GATED VIRTUAL PINCH 
+    # 2. FINGERTIP REWARD (Your original logic)
     # ==========================================
-    thumb_tip = link_pos[:, 2, :]
-    index_tip = link_pos[:, 4, :]
-    mid_point = (thumb_tip + index_tip) / 2.0
-    d_mid = torch.linalg.norm(mid_point - object_pos, dim=-1)
-    
-    # Gate the pinch using the new natural palm alignment
-    palm_alignment_multiplier = torch.exp(-15.0 * palm_dist_error)
-    gated_pinch_rew = torch.exp(-25.0 * d_mid) * palm_alignment_multiplier
+    dists = torch.linalg.norm(tips_w - object_pos.unsqueeze(1), dim=-1) 
+    fingertip_dist_avg = dists.mean(dim=1) 
+    hand_finger_rew = 1.0 - torch.tanh(fingertip_dist_avg / 0.1) 
 
-    # Action Rate Penalty
     actions = env.action_manager.action
     prev_actions = env.action_manager.prev_action
     action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
 
     # ==========================================
-    # 3. LIFT AND GOAL CALCULATIONS
+    # 3. PALM PRE-GRASP TARGET (Your 16cm parking logic)
     # ==========================================
-    success = (object_pos[:, 2] > _SUCCESS_Z).float()
-    lift_rew = torch.where(success == 1.0, 1.0, 0.0)
-    
-    lift_height = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
-    lift_cont_rew = lift_height * 80.0 
-    
-    goal_rew = success * (1.0 - torch.tanh(palm_dist_error / 0.1))
-    goal_rew_fine_grained = success * (1.0 - torch.tanh(palm_dist_error / 0.05))
+    hand_object_pos = object_pos.clone()
+    hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.160 
+    hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.040  
 
+    hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
+    hand_object_rew = 1.0 - torch.tanh(hand_object_dist / 0.3)
+    
     # ==========================================
-    # 4. PHASE DECAY (Kills the "Prop Up" exploit)
+    # 4. LIFT AND GOAL CALCULATIONS
     # ==========================================
-    # If the cube is lifted/tilted more than 1.5cm, slash the hovering rewards by 80%.
-    # The policy can no longer safely farm points by propping the cube up.
-    is_lifted = lift_height > 0.015
-    reach_decay = torch.where(is_lifted, 0.2, 1.0)
+    lift_rew = torch.where(object_pos[:, 2] > _SUCCESS_Z, 1.0, 0.0)
+    lift_cont_rew = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
+    
+    goal_rew = (object_pos[:, 2] > _SUCCESS_Z).float() * (1.0 - torch.tanh(hand_object_dist / 0.3))
+    goal_rew_fine_grained = (object_pos[:, 2] > _SUCCESS_Z).float() * (1.0 - torch.tanh(hand_object_dist / 0.05))
+
+    r_close = 0.1
+    close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
 
     # ==========================================
     # 5. TOTAL REWARD AGGREGATION
     # ==========================================
     reward = (
-        (0.25 * hand_object_rew + close_bonus + 0.5 * gated_pinch_rew) * reach_decay
+        0.25 * hand_object_rew
+        + close_bonus
+        + 0.5 * hand_finger_rew 
         - action_rate_penalty * action_penalty_scale
         + lift_rew * 25.0
         + goal_rew * 16.0
         + goal_rew_fine_grained * 5.0
-        + lift_cont_rew 
-        - 0.005 # Alive penalty
+        + lift_cont_rew * 80.0 
+        - 0.005 
     )
 
-    # ==========================================
-    # 6. TERMINAL FAILURE PENALTY
-    # ==========================================
     resets = torch.where(
         obj.data.root_pos_w[:, 2] < _DROP_Z,
         torch.ones_like(reward),
@@ -218,74 +203,57 @@ class SceneCfg(InteractiveSceneCfg):
 class InspireMimicAction(JointPositionAction):
     def __init__(self, cfg: JointPositionActionCfg, env: ManagerBasedRLEnv):
         super().__init__(cfg, env)
-        self._env = env # Store env reference to access object position
+        self._env = env 
         
         def get_idx(joint_name):
             return self._asset.find_joints(joint_name)[0][0]
 
-        # 1. Primary joints (driven by policy)
         self.primary_finger_indices = [
-            get_idx("right_thumb_1_joint"),
-            get_idx("right_thumb_2_joint"),
-            get_idx("right_index_1_joint"),
-            get_idx("right_middle_1_joint"),
-            get_idx("right_ring_1_joint"),
-            get_idx("right_little_1_joint")
+            get_idx("right_thumb_1_joint"), get_idx("right_thumb_2_joint"),
+            get_idx("right_index_1_joint"), get_idx("right_middle_1_joint"),
+            get_idx("right_ring_1_joint"), get_idx("right_little_1_joint")
         ]
 
-        # We need these specifically for the mimic math
         self.src_thumb_2 = get_idx("right_thumb_2_joint")
         self.src_idx_1 = get_idx("right_index_1_joint")
         self.src_mid_1 = get_idx("right_middle_1_joint")
         self.src_rng_1 = get_idx("right_ring_1_joint")
         self.src_lit_1 = get_idx("right_little_1_joint")
 
-        # 2. Mimic joints
         self.mimic_joint_indices = [
-            get_idx("right_thumb_3_joint"),
-            get_idx("right_thumb_4_joint"),
-            get_idx("right_index_2_joint"),
-            get_idx("right_middle_2_joint"),
-            get_idx("right_ring_2_joint"),
-            get_idx("right_little_2_joint")
+            get_idx("right_thumb_3_joint"), get_idx("right_thumb_4_joint"),
+            get_idx("right_index_2_joint"), get_idx("right_middle_2_joint"),
+            get_idx("right_ring_2_joint"), get_idx("right_little_2_joint")
         ]
         
-        # 3. Palm body index for distance checking
         self.palm_body_idx = self._asset.find_bodies("right_wrist_yaw_link")[0][0]
 
     def apply_actions(self):
-            # 1. Apply the standard RL policy actions to the 6 primary joints
-            super().apply_actions()
+        super().apply_actions()
+        
+        palm_pos = self._asset.data.body_pos_w[:, self.palm_body_idx]
+        obj_pos = self._env.scene["target_object"].data.root_pos_w
+        dist_to_obj = torch.linalg.norm(palm_pos - obj_pos, dim=-1)
+        
+        targets = self._asset.data.joint_pos_target.clone()
+        
+        # 18cm unfreeze zone so the fingers unlock before parking at 16cm
+        mask = dist_to_obj > 0.18
+        for idx in self.primary_finger_indices:
+            targets[mask, idx] = 0.0 
             
-            # 2. Coarse-to-Fine Masking: Check distance from palm to object
-            palm_pos = self._asset.data.body_pos_w[:, self.palm_body_idx]
-            obj_pos = self._env.scene["target_object"].data.root_pos_w
-            dist_to_obj = torch.linalg.norm(palm_pos - obj_pos, dim=-1)
-            
-            targets = self._asset.data.joint_pos_target.clone()
-            
-            # If distance > 0.08m, freeze fingers in an open state (0.0 radians)
-            mask = dist_to_obj > 0.08
-            for idx in self.primary_finger_indices:
-                targets[mask, idx] = 0.0 
-                
-            # Apply the masked targets back to the primary joints (FIXED SHAPE MISMATCH HERE)
-            self._asset.set_joint_position_target(
-                targets[:, self.primary_finger_indices], 
-                joint_ids=self.primary_finger_indices
-            )
+        primary_targets = targets[:, self.primary_finger_indices].contiguous()
+        self._asset.set_joint_position_target(primary_targets, joint_ids=self.primary_finger_indices)
 
-            # 3. Compute and apply mimic targets based on the (potentially masked) primary targets
-            t3 = (targets[:, self.src_thumb_2] * 0.8024).unsqueeze(1)
-            t4 = t3 * 0.9487 
-            i2 = (targets[:, self.src_idx_1] * 1.0843).unsqueeze(1)
-            m2 = (targets[:, self.src_mid_1] * 1.0843).unsqueeze(1)
-            r2 = (targets[:, self.src_rng_1] * 1.0843).unsqueeze(1)
-            l2 = (targets[:, self.src_lit_1] * 1.0843).unsqueeze(1)
-            
-            # 4. Concatenate and apply the mimic targets to the physics solver
-            mimic_targets = torch.cat([t3, t4, i2, m2, r2, l2], dim=1)
-            self._asset.set_joint_position_target(mimic_targets, joint_ids=self.mimic_joint_indices)
+        t3 = (targets[:, self.src_thumb_2] * 0.8024).unsqueeze(1)
+        t4 = t3 * 0.9487 
+        i2 = (targets[:, self.src_idx_1] * 1.0843).unsqueeze(1)
+        m2 = (targets[:, self.src_mid_1] * 1.0843).unsqueeze(1)
+        r2 = (targets[:, self.src_rng_1] * 1.0843).unsqueeze(1)
+        l2 = (targets[:, self.src_lit_1] * 1.0843).unsqueeze(1)
+        
+        mimic_targets = torch.cat([t3, t4, i2, m2, r2, l2], dim=1).contiguous()
+        self._asset.set_joint_position_target(mimic_targets, joint_ids=self.mimic_joint_indices)
 
 @configclass
 class InspireMimicActionCfg(JointPositionActionCfg):
