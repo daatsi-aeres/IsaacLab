@@ -8,8 +8,12 @@ from isaaclab.assets import ArticulationCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 import os
 
-# Define the absolute path to your converted/fixed USD file
-_USD_PATH = "/home/daatsi-aeres/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/manipulation/g1_pick/g1_with_hands_final.usd"
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+_USD_PATH = os.path.join(
+    _CURRENT_DIR,
+    "g1_with_hands_final.usd"
+)
 
 G1_INSPIRE_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
