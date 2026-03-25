@@ -56,14 +56,16 @@ def wuji_monolithic_reward(
 
     # REACH REWARD: Creates a dense gradient guiding the palm to a hover position behind/above the cube
     palm_target = cube_pos.clone()
-    palm_target[:, 0] -= 0.16  # 16cm behind to give the Inspire fingers clearance to close
+    palm_target[:, 0] -= 0.06  # 16cm behind to give the Inspire fingers clearance to close
     palm_target[:, 2] += 0.04  # 4cm above to prevent smashing the cube into the table
     palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
-    reach_rew = 1.0 - torch.tanh(palm_dist / 0.2)
+    # THE FIX: torch.clamp creates a 4cm "tolerance sphere". 
+    # Once the palm is within 4cm, the penalty drops to 0 and reward is locked at 1.0.
+    reach_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.04, min=0.0) / 0.1)
 
     # GRASP REWARD: Dense gradient incentivizing the policy to close all 5 fingertips around the cube
     tips_dist = torch.linalg.norm(tips_pos - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
-    grasp_rew = 1.0 - torch.tanh(tips_dist / 0.1)
+    grasp_rew = 1.0 - torch.tanh(tips_dist / 0.05)
 
     # LIFT REWARD: Continuous positive reinforcement strictly for upward Z-axis movement
     lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0) # Clamped so pressing down isn't penalized
@@ -271,7 +273,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_penalty_scale": 0.05, # Currently disabled, increase to 0.01 if robot is too twitchy
+            "action_penalty_scale": 0.001, # Currently disabled, increase to 0.01 if robot is too twitchy
         },
     )
 
