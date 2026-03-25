@@ -198,7 +198,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=1.0, # Action scale maps policy outputs [-1, 1] to larger joint position targets
+        scale=0.2, # Action scale maps policy outputs [-1, 1] to larger joint position targets
         use_default_offset=True, # Actions are relative to the ideal starting posture
     )
     
@@ -208,7 +208,7 @@ class ActionsCfg:
             "R_thumb_proximal_yaw_joint", "R_thumb_proximal_pitch_joint", "R_index_proximal_joint",
             "R_middle_proximal_joint", "R_ring_proximal_joint", "R_pinky_proximal_joint",
         ],
-        scale=1.0, # Fingers need finer control, so we use a smaller action scale
+        scale=0.5, # Fingers need finer control, so we use a smaller action scale
         use_default_offset=True,
     )
 
