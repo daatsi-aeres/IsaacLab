@@ -198,7 +198,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=2.5, # Action scale maps policy outputs [-1, 1] to larger joint position targets
+        scale=1.0, # Action scale maps policy outputs [-1, 1] to larger joint position targets
         use_default_offset=True, # Actions are relative to the ideal starting posture
     )
     
@@ -271,7 +271,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_penalty_scale": 0.0, # Currently disabled, increase to 0.01 if robot is too twitchy
+            "action_penalty_scale": 0.05, # Currently disabled, increase to 0.01 if robot is too twitchy
         },
     )
 
