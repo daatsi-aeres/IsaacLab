@@ -49,49 +49,70 @@ def wuji_monolithic_reward(
     robot: Articulation = env.scene[robot_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
 
-    # Extracts world coordinates to compute spatial relationships for the policy
+    # ==========================================
+    # 1. EXTRACT COORDINATES
+    # ==========================================
     cube_pos = obj.data.root_pos_w.clone()
     palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]]
     tips_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
 
-    # REACH REWARD: Creates a dense gradient guiding the palm to a hover position behind/above the cube
+    # Calculate the Virtual Midpoint (average position of all 5 fingertips)
+    midpoint = tips_pos.mean(dim=1)
+
+    # ==========================================
+    # 2. TOP-DOWN POSTURE (The "Crane" Setup)
+    # ==========================================
+    # We gently encourage the palm to stay 8cm above the cube.
+    # This ensures the fingers are pointing straight down, avoiding side-grasps.
     palm_target = cube_pos.clone()
-    palm_target[:, 0] -= 0.06  # 16cm behind to give the Inspire fingers clearance to close
-    palm_target[:, 2] += 0.04  # 4cm above to prevent smashing the cube into the table
+    palm_target[:, 2] += 0.08  
+    
     palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
-    # THE FIX: torch.clamp creates a 4cm "tolerance sphere". 
-    # Once the palm is within 4cm, the penalty drops to 0 and reward is locked at 1.0.
-    reach_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.04, min=0.0) / 0.1)
+    # 3cm deadzone: As long as the palm is generally overhead, give it full points.
+    posture_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.03, min=0.0) / 0.1)
 
-    # GRASP REWARD: Dense gradient incentivizing the policy to close all 5 fingertips around the cube
+    # ==========================================
+    # 3. MIDPOINT REACH (The Target Alignment)
+    # ==========================================
+    # Drives the empty center of the open hand exactly to the center of the block
+    midpoint_dist = torch.linalg.norm(midpoint - cube_pos, dim=-1)
+    reach_rew = 1.0 - torch.tanh(midpoint_dist / 0.05)
+
+    # ==========================================
+    # 4. GRASP SQUEEZE (The Pinch)
+    # ==========================================
+    # Once the midpoint is over the cube, this pulls the physical fingertips into the plastic
     tips_dist = torch.linalg.norm(tips_pos - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
-    grasp_rew = 1.0 - torch.tanh(tips_dist / 0.05)
+    grasp_rew = 1.0 - torch.tanh(tips_dist / 0.05) 
 
-    # LIFT REWARD: Continuous positive reinforcement strictly for upward Z-axis movement
-    lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0) # Clamped so pressing down isn't penalized
+    # ==========================================
+    # 5. LIFT & SUCCESS
+    # ==========================================
+    lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
     lift_cont_rew = lift_height * 50.0
 
-    # SUCCESS BONUS: Massive sparse reward step-function to lock in the behavior once the goal is reached
     is_lifted = cube_pos[:, 2] > _SUCCESS_Z
     success_bonus = is_lifted.float() * 25.0
 
-    # SMOOTHNESS PENALTY: Punishes high-frequency oscillations to ensure sim-to-real transferability
+    # ==========================================
+    # 6. PENALTIES & AGGREGATION
+    # ==========================================
     actions = env.action_manager.action
     prev_actions = env.action_manager.prev_action
     action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
 
     is_dropped = cube_pos[:, 2] < _DROP_Z
 
-    # AGGREGATE: Balances exploration (reach/grasp) with exploitation (lift/success)
+    # AGGREGATION: Notice how perfectly balanced these weights are now.
     reward = (
-        reach_rew * 1.0 +
-        grasp_rew * 2.0 +
+        posture_rew * 0.5 +   # Gentle guide for the arm's angle
+        reach_rew * 1.5 +     # Strong pull for the hand's center
+        grasp_rew * 2.0 +     # Strongest pull for the finger closure
         lift_cont_rew +
         success_bonus -
         (action_rate_penalty * action_penalty_scale)
     )
 
-    # TERMINAL PENALTY: Heavily punishes the policy for knocking the block off the table
     reward = torch.where(is_dropped, torch.ones_like(reward) * -10.0, reward)
 
     return reward
@@ -200,7 +221,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=0.2, # Action scale maps policy outputs [-1, 1] to larger joint position targets
+        scale=0.5, # Action scale maps policy outputs [-1, 1] to larger joint position targets
         use_default_offset=True, # Actions are relative to the ideal starting posture
     )
     

@@ -101,21 +101,17 @@ G1_INSPIRE_CFG = ArticulationCfg(
             stiffness=20.0,
             damping=2.0,
         ),
-        "arm_main": ImplicitActuatorCfg(
-            joint_names_expr=[
-                ".*_shoulder_pitch_joint", ".*_shoulder_roll_joint", ".*_shoulder_yaw_joint",
-                ".*_elbow_joint", ".*_wrist_roll_joint",
-            ],
-            effort_limit_sim=25.0,
-            stiffness=2000.0,
-            damping=100.0,
-        ),
-        "wrists": ImplicitActuatorCfg(
-            joint_names_expr=[".*_wrist_pitch_joint", ".*_wrist_yaw_joint"],
-            effort_limit_sim=5.0,
-            stiffness=200.0,
-            damping=10.0,
-        ),
+        "arms": ImplicitActuatorCfg(
+                    joint_names_expr=[
+                        ".*_shoulder_pitch_joint", ".*_shoulder_roll_joint", ".*_shoulder_yaw_joint",
+                        ".*_elbow_joint", 
+                        ".*_wrist_roll_joint", ".*_wrist_pitch_joint", ".*_wrist_yaw_joint" # Merged!
+                    ],
+                    effort_limit_sim=300.0,  # Plenty of torque to hold the heavy Inspire hand
+                    stiffness=3000.0,        # Rock solid crane
+                    damping=100.0,           # No vibrations
+                    armature=0.001,
+                ),
         "left_hand": ImplicitActuatorCfg(
             joint_names_expr=["L_.*_joint"], # Uses USD Prefix
             effort_limit_sim=10.0,
@@ -124,9 +120,10 @@ G1_INSPIRE_CFG = ArticulationCfg(
         ),
         "right_hand": ImplicitActuatorCfg(
             joint_names_expr=["R_.*_joint"], # Uses USD Prefix
-            effort_limit_sim=10.0,
-            stiffness=15.0,
-            damping=2.0,
+            effort_limit_sim=30.0,
+            stiffness=10.0,
+            damping=0.2,
+            armature=0.001,
         ),
     },
 )
