@@ -48,14 +48,14 @@ G1_INSPIRE_CFG = ArticulationCfg(
             "waist_roll_joint": 0.0,
             "waist_pitch_joint": 0.0,
 
-            # ── RIGHT Arm ──
-            "right_shoulder_pitch_joint": -1.5,
-            "right_shoulder_roll_joint": -0.5,
-            "right_shoulder_yaw_joint": 0.0,
-            "right_elbow_joint": 2.0,
-            "right_wrist_roll_joint": 0.0,
-            "right_wrist_pitch_joint": -1.57,
-            "right_wrist_yaw_joint": 0.0,
+            # ── RIGHT Arm (Converted from your UI visually posed degrees) ──
+            "right_shoulder_pitch_joint": -0.583,  # -33.39 deg
+            "right_shoulder_roll_joint": -0.864,   # -49.49 deg
+            "right_shoulder_yaw_joint": 0.426,     # 24.39 deg
+            "right_elbow_joint": 0.370,            # 21.21 deg
+            "right_wrist_roll_joint": -0.410,      # -23.49 deg
+            "right_wrist_pitch_joint": 0.000,      # 0.01 deg (rounded to 0)
+            "right_wrist_yaw_joint": -0.103,       # -5.9 deg
             
             # ── LEFT Arm ──
             "left_shoulder_pitch_joint": 1.5,
@@ -66,13 +66,26 @@ G1_INSPIRE_CFG = ArticulationCfg(
             "left_wrist_pitch_joint": 0.0,
             "left_wrist_yaw_joint": 0.0,
 
-            # ── Inspire hands: USD Naming Convention ──
+            # ── Inspire Right Hand (ALL 12 JOINTS EXPLICITLY INITIALIZED) ──
             "R_thumb_proximal_yaw_joint": 0.5,
             "R_thumb_proximal_pitch_joint": 0.25,
+            "R_thumb_intermediate_joint": 0.0, # <-- Newly added!
+            "R_thumb_distal_joint": 0.0,       # <-- Newly added!
+            
             "R_index_proximal_joint": 0.6,
+            "R_index_intermediate_joint": 0.0, # <-- Newly added!
+            
             "R_middle_proximal_joint": 0.6,
+            "R_middle_intermediate_joint": 0.0, # <-- Newly added!
+            
             "R_ring_proximal_joint": 0.6,
+            "R_ring_intermediate_joint": 0.0, # <-- Newly added!
+            
             "R_pinky_proximal_joint": 0.6,
+            "R_pinky_intermediate_joint": 0.0, # <-- Newly added!
+            
+            # ── Let's quickly do the left hand too, just to be safe ──
+            "L_.*_joint": 0.0,
         },
         joint_vel={".*": 0.0},
     ),
@@ -121,9 +134,8 @@ G1_INSPIRE_CFG = ArticulationCfg(
         "right_hand": ImplicitActuatorCfg(
             joint_names_expr=["R_.*_joint"], # Uses USD Prefix
             effort_limit_sim=30.0,
-            stiffness=10.0,
-            damping=2.0,
-            armature=0.001,
+            stiffness=100.0,
+            damping=0.5,
         ),
     },
 )

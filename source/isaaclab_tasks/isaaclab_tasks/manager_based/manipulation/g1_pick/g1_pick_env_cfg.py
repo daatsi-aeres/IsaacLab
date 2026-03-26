@@ -159,7 +159,7 @@ class SceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2), # Light enough to lift, heavy enough to drop realistically
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.40, 0.00, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.35, 0.00, _OBJ_INIT_Z]),
     )
 
     plane = AssetBaseCfg(
@@ -222,7 +222,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=0.2, # Action scale maps policy outputs [-1, 1] to larger joint position targets
+        scale=0.45, # Action scale maps policy outputs [-1, 1] to larger joint position targets
         use_default_offset=True, # Actions are relative to the ideal starting posture
     )
     
@@ -232,9 +232,10 @@ class ActionsCfg:
             "R_thumb_proximal_yaw_joint", "R_thumb_proximal_pitch_joint", "R_index_proximal_joint",
             "R_middle_proximal_joint", "R_ring_proximal_joint", "R_pinky_proximal_joint",
         ],
-        scale=0.5, # Fingers need finer control, so we use a smaller action scale
+        scale=2.5, # Fingers need finer control, so we use a smaller action scale
         use_default_offset=True,
     )
+
 
 @configclass
 class ObservationsCfg:
