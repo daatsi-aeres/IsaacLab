@@ -44,7 +44,7 @@ def wuji_monolithic_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg,
-    action_penalty_scale: float = 1.0,
+    action_penalty_scale: float = 0.05, # Increased default to enforce smoothness
 ) -> torch.Tensor:
     robot: Articulation = env.scene[robot_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
@@ -62,36 +62,34 @@ def wuji_monolithic_reward(
     # ==========================================
     # 2. TOP-DOWN POSTURE (The "Crane" Setup)
     # ==========================================
-    # We gently encourage the palm to stay 8cm above the cube.
-    # This ensures the fingers are pointing straight down, avoiding side-grasps.
     palm_target = cube_pos.clone()
     palm_target[:, 2] += 0.08  
     
     palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
-    # 3cm deadzone: As long as the palm is generally overhead, give it full points.
     posture_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.03, min=0.0) / 0.1)
 
     # ==========================================
     # 3. MIDPOINT REACH (The Target Alignment)
     # ==========================================
-    # Drives the empty center of the open hand exactly to the center of the block
     midpoint_dist = torch.linalg.norm(midpoint - cube_pos, dim=-1)
     reach_rew = 1.0 - torch.tanh(midpoint_dist / 0.05)
 
     # ==========================================
     # 4. GRASP SQUEEZE (The Pinch)
     # ==========================================
-    # Once the midpoint is over the cube, this pulls the physical fingertips into the plastic
     tips_dist = torch.linalg.norm(tips_pos - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
     grasp_rew = 1.0 - torch.tanh(tips_dist / 0.05) 
 
     # ==========================================
-    # 5. LIFT & SUCCESS
+    # 5. LIFT & SUCCESS (FIXED: Upper Bound Added)
     # ==========================================
-    lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
-    lift_cont_rew = lift_height * 50.0
+    # CRITICAL FIX: Clamp the max height so the policy cannot farm points by launching the cube.
+    # 0.15m is chosen so it gets rewarded slightly past the 0.10m success threshold, then it caps out.
+    lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
+    lift_cont_rew = lift_height * 50.0 
 
     is_lifted = cube_pos[:, 2] > _SUCCESS_Z
+    # Success bonus remains, but now the continuous lift reward won't overshadow it if the cube flies up.
     success_bonus = is_lifted.float() * 25.0
 
     # ==========================================
@@ -99,20 +97,23 @@ def wuji_monolithic_reward(
     # ==========================================
     actions = env.action_manager.action
     prev_actions = env.action_manager.prev_action
+    
+    # Penalize the squared difference between consecutive actions to stop erratic flailing
     action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
 
     is_dropped = cube_pos[:, 2] < _DROP_Z
 
-    # AGGREGATION: Notice how perfectly balanced these weights are now.
+    # AGGREGATION
     reward = (
-        posture_rew * 0.5 +   # Gentle guide for the arm's angle
-        reach_rew * 1.5 +     # Strong pull for the hand's center
-        grasp_rew * 2.0 +     # Strongest pull for the finger closure
+        posture_rew * 0.5 +   
+        reach_rew * 1.5 +     
+        grasp_rew * 2.0 +     
         lift_cont_rew +
         success_bonus -
-        (action_rate_penalty * action_penalty_scale)
+        (action_rate_penalty * action_penalty_scale) # Smoothness constraint
     )
 
+    # Overwrite the reward with a heavy penalty if the object is knocked off the table
     reward = torch.where(is_dropped, torch.ones_like(reward) * -10.0, reward)
 
     return reward
@@ -221,7 +222,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=0.5, # Action scale maps policy outputs [-1, 1] to larger joint position targets
+        scale=0.2, # Action scale maps policy outputs [-1, 1] to larger joint position targets
         use_default_offset=True, # Actions are relative to the ideal starting posture
     )
     
@@ -294,7 +295,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_penalty_scale": 0.001, # Currently disabled, increase to 0.01 if robot is too twitchy
+            "action_penalty_scale": 0.01, # Currently disabled, increase to 0.01 if robot is too twitchy
         },
     )
 

@@ -108,7 +108,7 @@ G1_INSPIRE_CFG = ArticulationCfg(
                         ".*_wrist_roll_joint", ".*_wrist_pitch_joint", ".*_wrist_yaw_joint" # Merged!
                     ],
                     effort_limit_sim=300.0,  # Plenty of torque to hold the heavy Inspire hand
-                    stiffness=3000.0,        # Rock solid crane
+                    stiffness=2000.0,        # Rock solid crane
                     damping=100.0,           # No vibrations
                     armature=0.001,
                 ),
@@ -122,7 +122,7 @@ G1_INSPIRE_CFG = ArticulationCfg(
             joint_names_expr=["R_.*_joint"], # Uses USD Prefix
             effort_limit_sim=30.0,
             stiffness=10.0,
-            damping=0.2,
+            damping=2.0,
             armature=0.001,
         ),
     },
