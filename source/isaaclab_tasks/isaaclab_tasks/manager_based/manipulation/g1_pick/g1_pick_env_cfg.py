@@ -44,70 +44,59 @@ def wuji_monolithic_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg,
-    action_rate_scale: float = 0.05,  # Penalty for twitching/changing mind
-    joint_vel_scale: float = 0.005,   # Penalty for physically moving too fast
-    action_l2_scale: float = 0.01,    # Penalty for maxing out torque commands
+    action_rate_scale: float = 0.005, 
+    joint_vel_scale: float = 0.0005,   
+    action_l2_scale: float = 0.001,    
 ) -> torch.Tensor:
     robot: Articulation = env.scene[robot_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
 
-    # ==========================================
     # 1. EXTRACT COORDINATES & VELOCITIES
-    # ==========================================
     cube_pos = obj.data.root_pos_w.clone()
     palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]]
     tips_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
-    
-    # Extract joint velocities for the speed limit penalty
     joint_vels = robot.data.joint_vel 
-
-    # Calculate the Virtual Midpoint (average position of all 5 fingertips)
     midpoint = tips_pos.mean(dim=1)
 
-    # ==========================================
-    # 2. TOP-DOWN POSTURE (The "Crane" Setup)
-    # ==========================================
+    # 2. TOP-DOWN POSTURE
     palm_target = cube_pos.clone()
     palm_target[:, 2] += 0.08  
-    
     palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
-    posture_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.03, min=0.0) / 0.1)
+    posture_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.03, min=0.0) / 0.3)
 
-    # ==========================================
-    # 3. MIDPOINT REACH (The Target Alignment)
-    # ==========================================
+    # 3. MIDPOINT REACH
     midpoint_dist = torch.linalg.norm(midpoint - cube_pos, dim=-1)
-    reach_rew = 1.0 - torch.tanh(midpoint_dist / 0.05)
+    reach_rew = 1.0 - torch.tanh(midpoint_dist / 0.25)
 
-    # ==========================================
-    # 4. GRASP SQUEEZE (The Pinch)
-    # ==========================================
+    # 4. GRASP SQUEEZE
     tips_dist = torch.linalg.norm(tips_pos - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
-    grasp_rew = 1.0 - torch.tanh(tips_dist / 0.05) 
+    grasp_rew = 1.0 - torch.tanh(tips_dist / 0.15) 
 
     # ==========================================
-    # 5. LIFT & SUCCESS 
+    # 5. LIFT & SUCCESS (THE LOOPHOLE FIX)
     # ==========================================
+    # The robot is only considered "grasping" if its fingers are within 6cm of the cube.
+    is_grasped = tips_dist < 0.06
+
     lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
-    lift_cont_rew = lift_height * 50.0 
+    
+    # Multiply the lift rewards by is_grasped.float(). 
+    # If it uppercuts the block, is_grasped becomes 0.0, instantly zeroing out the reward.
+    lift_cont_rew = lift_height * 50.0 * is_grasped.float() 
 
     is_lifted = cube_pos[:, 2] > _SUCCESS_Z
-    success_bonus = is_lifted.float() * 25.0
+    success_bonus = is_lifted.float() * 25.0 * is_grasped.float()
 
-    # ==========================================
     # 6. PENALTIES & AGGREGATION
-    # ==========================================
     actions = env.action_manager.action
     prev_actions = env.action_manager.prev_action
     
-    # Smoothness Constraints
     action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
     joint_vel_penalty = torch.sum(torch.square(joint_vels), dim=-1)
     action_l2_penalty = torch.sum(torch.square(actions), dim=-1)
 
     is_dropped = cube_pos[:, 2] < _DROP_Z
 
-    # AGGREGATION
     reward = (
         posture_rew * 0.5 +   
         reach_rew * 1.5 +     
@@ -119,7 +108,6 @@ def wuji_monolithic_reward(
         (action_l2_penalty * action_l2_scale)
     )
 
-    # Overwrite the reward with a heavy penalty if the object is knocked off the table
     reward = torch.where(is_dropped, torch.ones_like(reward) * -10.0, reward)
 
     return reward
@@ -302,9 +290,9 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_rate_scale": 0.005, # Heavily penalizes twitching/spasming
-            "joint_vel_scale": 0.001,  # Creates a "speed limit" to stop Mach 3 movements
-            "action_l2_scale": 0.001,   # Encourages the network to rest when not moving
+            "action_rate_scale": 0.0005, # Heavily penalizes twitching/spasming
+            "joint_vel_scale": 0.0,  # Creates a "speed limit" to stop Mach 3 movements
+            "action_l2_scale": 0.0,   # Encourages the network to rest when not moving
         },
     )
 
