@@ -135,7 +135,7 @@ G1_INSPIRE_CFG = ArticulationCfg(
             joint_names_expr=["R_.*_joint"], # Uses USD Prefix
             effort_limit_sim=30.0,
             stiffness=100.0,
-            damping=0.5,
+            damping=5.0,
         ),
     },
 )
