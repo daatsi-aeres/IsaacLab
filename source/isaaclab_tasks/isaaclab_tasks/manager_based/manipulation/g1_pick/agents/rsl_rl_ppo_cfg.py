@@ -10,12 +10,12 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, R
 
 @configclass
 class G1PickPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    num_steps_per_env = 64
-    max_iterations = 10000
+    num_steps_per_env = 32
+    max_iterations = 5000
     save_interval = 50
     experiment_name = "g1_pick"
     policy = RslRlPpoActorCriticCfg(
-        init_noise_std=0.5,
+        init_noise_std=1.0,
         actor_obs_normalization=True,
         critic_obs_normalization=True,
         actor_hidden_dims=[512, 256, 128],  # correct for 63-dim obs
@@ -26,7 +26,7 @@ class G1PickPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.005,
+        entropy_coef=0.008,
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=3.0e-4,

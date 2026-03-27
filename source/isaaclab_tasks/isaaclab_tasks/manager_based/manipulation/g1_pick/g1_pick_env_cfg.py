@@ -402,28 +402,44 @@ class G1RightArmLiftEnvCfg_V2(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
-
+    
     def __post_init__(self):
-        self.decimation = 4             # Policy runs at 30Hz (120Hz physics / 4)
-        self.episode_length_s = 8.0     # Max time an agent has to lift the block before forced reset
-        self.sim.dt = 1 / 120           # Physics integration step, high enough for stable hand collisions
-        self.sim.render_interval = self.decimation
-        self.sim.physx.bounce_threshold_velocity = 0.2
-        self.sim.physx.gpu_max_rigid_patch_count = 2 * 5 * 2**15 
+            # --- BASIC SIMULATION SETTINGS ---
+            self.decimation = 4             
+            self.episode_length_s = 8.0     
+            self.sim.dt = 1 / 120           
+            self.sim.render_interval = self.decimation
+            self.sim.physx.bounce_threshold_velocity = 0.2
 
-        # Applies near-infinite stiffness to inactive limbs, physically locking them in place during sim
-        left_hand_act = copy.deepcopy(self.scene.robot.actuators["left_hand"])
-        left_hand_act.stiffness = 10000.0
-        left_hand_act.damping = 1000.0
-        left_hand_act.effort_limit_sim = 10000.0
-        self.scene.robot.actuators["left_hand"] = left_hand_act
+            # --- OPTIMIZED GPU BUFFERS FOR 8192 ENVS ---
+            # Dropped from 10M to 2M to save VRAM and speed up iteration loops
+            self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 2 * 1024 * 1024
+            self.sim.physx.gpu_found_lost_pairs_capacity = 2 * 1024 * 1024
+            self.sim.physx.gpu_total_aggregate_pairs_capacity = 1024 * 1024
+            
+            self.sim.physx.gpu_max_rigid_patch_count = 1024 * 1024
+            self.sim.physx.gpu_max_rigid_contact_count = 2 * 1024 * 1024
+            
+            self.sim.physx.gpu_heap_capacity = 64 * 1024 * 1024
+            self.sim.physx.gpu_temp_buffer_capacity = 16 * 1024 * 1024
+            # -----------------------------------------------------------
 
-        for part in ["legs", "feet"]:
-            act = copy.deepcopy(self.scene.robot.actuators[part])
-            act.stiffness = 10000.0
-            act.damping = 1000.0
-            act.effort_limit_sim = 10000.0
-            self.scene.robot.actuators[part] = act
+            # --- RIGID JOINT LOCKING ---
+            # Lock Left Hand
+            left_hand_act = copy.deepcopy(self.scene.robot.actuators["left_hand"])
+            left_hand_act.stiffness = 10000.0
+            left_hand_act.damping = 1000.0
+            left_hand_act.effort_limit_sim = 10000.0
+            self.scene.robot.actuators["left_hand"] = left_hand_act
+
+            # Lock Lower Body
+            for part in ["legs", "feet"]:
+                if part in self.scene.robot.actuators:
+                    act = copy.deepcopy(self.scene.robot.actuators[part])
+                    act.stiffness = 10000.0
+                    act.damping = 1000.0
+                    act.effort_limit_sim = 10000.0
+                    self.scene.robot.actuators[part] = act
 
 @configclass
 class G1RightArmLiftEnvCfg_V2_PLAY(G1RightArmLiftEnvCfg_V2):
