@@ -124,7 +124,7 @@ def wuji_monolithic_reward(
     reward = torch.where(is_dropped, torch.ones_like(reward) * -10.0, reward)
 
     return reward
-    
+
 @configclass
 class SceneCfg(InteractiveSceneCfg):
     replicate_physics: bool = True # Ensures determinism across all 4096 parallel environments
@@ -380,6 +380,27 @@ class EventCfg:
             "pose_range": {"x": (-0.10, 0.10), "y": (-0.05, 0.05), "z": (0.01, 0.01)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("target_object"),
+        },
+    )
+
+    apply_high_friction_to_fingers = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="startup", # Only runs once when the environment boots up
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", 
+                body_names=[
+                    "R_thumb_distal", 
+                    "R_index_intermediate", 
+                    "R_middle_intermediate", 
+                    "R_ring_intermediate", 
+                    "R_pinky_intermediate"
+                ]
+            ),
+            "static_friction_range": (1.5, 1.5),   # Min and Max are the same to force an exact value
+            "dynamic_friction_range": (1.5, 1.5),
+            "restitution_range": (0.0, 0.0),       # Zero bounciness
+            "num_buckets": 1,                      # All fingers share this one material
         },
     )
 
