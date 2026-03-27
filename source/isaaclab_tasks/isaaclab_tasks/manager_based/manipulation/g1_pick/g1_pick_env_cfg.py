@@ -56,7 +56,11 @@ def wuji_monolithic_reward(
     palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]]
     tips_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
     joint_vels = robot.data.joint_vel 
-    midpoint = tips_pos.mean(dim=1)
+
+    # Isolate Thumb and Index finger positions
+    # tips_pos[:, 0] is R_thumb_distal, tips_pos[:, 1] is R_index_intermediate
+    thumb_pos = tips_pos[:, 0]
+    index_pos = tips_pos[:, 1]
 
     # 2. TOP-DOWN POSTURE
     palm_target = cube_pos.clone()
@@ -64,24 +68,33 @@ def wuji_monolithic_reward(
     palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
     posture_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.03, min=0.0) / 0.3)
 
-    # 3. MIDPOINT REACH
-    midpoint_dist = torch.linalg.norm(midpoint - cube_pos, dim=-1)
-    reach_rew = 1.0 - torch.tanh(midpoint_dist / 0.25)
+    # 3. VIRTUAL PINCH ALIGNMENT
+    # Calculate the invisible point exactly halfway between the thumb and index finger
+    pinch_midpoint = (thumb_pos + index_pos) / 2.0
+    
+    # Reward aligning this empty space directly over the center of the cube
+    pinch_align_dist = torch.linalg.norm(pinch_midpoint - cube_pos, dim=-1)
+    reach_rew = 1.0 - torch.tanh(pinch_align_dist / 0.15)
 
-    # 4. GRASP SQUEEZE
-    tips_dist = torch.linalg.norm(tips_pos - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
-    grasp_rew = 1.0 - torch.tanh(tips_dist / 0.15) 
+    # 4. PINCH SQUEEZE (Surface Distance)
+    # The fingers must close in on the surface (0.025m radius) to get the squeeze reward, preventing clipping
+    thumb_surface_dist = torch.clamp(torch.linalg.norm(thumb_pos - cube_pos, dim=-1) - 0.025, min=0.0)
+    index_surface_dist = torch.clamp(torch.linalg.norm(index_pos - cube_pos, dim=-1) - 0.025, min=0.0)
+    
+    # Average the surface distance of JUST the two pinch fingers
+    squeeze_dist = (thumb_surface_dist + index_surface_dist) / 2.0
+    grasp_rew = 1.0 - torch.tanh(squeeze_dist / 0.10) 
 
     # ==========================================
-    # 5. LIFT & SUCCESS (THE LOOPHOLE FIX)
+    # 5. LIFT & SUCCESS (STRICT GATE)
     # ==========================================
-    # The robot is only considered "grasping" if its fingers are within 6cm of the cube.
-    is_grasped = tips_dist < 0.06
+    # The robot is ONLY grasping if BOTH the thumb and index are practically touching the surface (within 1.5cm)
+    is_grasped = (thumb_surface_dist < 0.015) & (index_surface_dist < 0.015)
 
     lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
     
     # Multiply the lift rewards by is_grasped.float(). 
-    # If it uppercuts the block, is_grasped becomes 0.0, instantly zeroing out the reward.
+    # If the policy tries to uppercut or pinky-wrap, is_grasped becomes 0.0, instantly zeroing out the reward.
     lift_cont_rew = lift_height * 50.0 * is_grasped.float() 
 
     is_lifted = cube_pos[:, 2] > _SUCCESS_Z
@@ -111,7 +124,7 @@ def wuji_monolithic_reward(
     reward = torch.where(is_dropped, torch.ones_like(reward) * -10.0, reward)
 
     return reward
-
+    
 @configclass
 class SceneCfg(InteractiveSceneCfg):
     replicate_physics: bool = True # Ensures determinism across all 4096 parallel environments
