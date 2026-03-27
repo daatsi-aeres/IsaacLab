@@ -122,7 +122,7 @@ G1_INSPIRE_CFG = ArticulationCfg(
                     ],
                     effort_limit_sim=300.0,  # Plenty of torque to hold the heavy Inspire hand
                     stiffness=2000.0,        # Rock solid crane
-                    damping=100.0,           # No vibrations
+                    damping=200.0,           # No vibrations
                     armature=0.001,
                 ),
         "left_hand": ImplicitActuatorCfg(

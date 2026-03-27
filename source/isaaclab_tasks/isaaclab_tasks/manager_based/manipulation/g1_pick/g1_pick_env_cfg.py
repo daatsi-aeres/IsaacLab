@@ -44,17 +44,22 @@ def wuji_monolithic_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
     object_cfg: SceneEntityCfg,
-    action_penalty_scale: float = 0.05, # Increased default to enforce smoothness
+    action_rate_scale: float = 0.05,  # Penalty for twitching/changing mind
+    joint_vel_scale: float = 0.005,   # Penalty for physically moving too fast
+    action_l2_scale: float = 0.01,    # Penalty for maxing out torque commands
 ) -> torch.Tensor:
     robot: Articulation = env.scene[robot_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
 
     # ==========================================
-    # 1. EXTRACT COORDINATES
+    # 1. EXTRACT COORDINATES & VELOCITIES
     # ==========================================
     cube_pos = obj.data.root_pos_w.clone()
     palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]]
     tips_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
+    
+    # Extract joint velocities for the speed limit penalty
+    joint_vels = robot.data.joint_vel 
 
     # Calculate the Virtual Midpoint (average position of all 5 fingertips)
     midpoint = tips_pos.mean(dim=1)
@@ -81,15 +86,12 @@ def wuji_monolithic_reward(
     grasp_rew = 1.0 - torch.tanh(tips_dist / 0.05) 
 
     # ==========================================
-    # 5. LIFT & SUCCESS (FIXED: Upper Bound Added)
+    # 5. LIFT & SUCCESS 
     # ==========================================
-    # CRITICAL FIX: Clamp the max height so the policy cannot farm points by launching the cube.
-    # 0.15m is chosen so it gets rewarded slightly past the 0.10m success threshold, then it caps out.
     lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
     lift_cont_rew = lift_height * 50.0 
 
     is_lifted = cube_pos[:, 2] > _SUCCESS_Z
-    # Success bonus remains, but now the continuous lift reward won't overshadow it if the cube flies up.
     success_bonus = is_lifted.float() * 25.0
 
     # ==========================================
@@ -98,8 +100,10 @@ def wuji_monolithic_reward(
     actions = env.action_manager.action
     prev_actions = env.action_manager.prev_action
     
-    # Penalize the squared difference between consecutive actions to stop erratic flailing
+    # Smoothness Constraints
     action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
+    joint_vel_penalty = torch.sum(torch.square(joint_vels), dim=-1)
+    action_l2_penalty = torch.sum(torch.square(actions), dim=-1)
 
     is_dropped = cube_pos[:, 2] < _DROP_Z
 
@@ -110,7 +114,9 @@ def wuji_monolithic_reward(
         grasp_rew * 2.0 +     
         lift_cont_rew +
         success_bonus -
-        (action_rate_penalty * action_penalty_scale) # Smoothness constraint
+        (action_rate_penalty * action_rate_scale) -
+        (joint_vel_penalty * joint_vel_scale) -
+        (action_l2_penalty * action_l2_scale)
     )
 
     # Overwrite the reward with a heavy penalty if the object is knocked off the table
@@ -222,7 +228,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=0.45, # Action scale maps policy outputs [-1, 1] to larger joint position targets
+        scale=0.3, # Action scale maps policy outputs [-1, 1] to larger joint position targets
         use_default_offset=True, # Actions are relative to the ideal starting posture
     )
     
@@ -232,7 +238,7 @@ class ActionsCfg:
             "R_thumb_proximal_yaw_joint", "R_thumb_proximal_pitch_joint", "R_index_proximal_joint",
             "R_middle_proximal_joint", "R_ring_proximal_joint", "R_pinky_proximal_joint",
         ],
-        scale=2.5, # Fingers need finer control, so we use a smaller action scale
+        scale=1.0, # Fingers need finer control, so we use a smaller action scale
         use_default_offset=True,
     )
 
@@ -296,7 +302,9 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_penalty_scale": 0.01, # Currently disabled, increase to 0.01 if robot is too twitchy
+            "action_rate_scale": 0.005, # Heavily penalizes twitching/spasming
+            "joint_vel_scale": 0.001,  # Creates a "speed limit" to stop Mach 3 movements
+            "action_l2_scale": 0.001,   # Encourages the network to rest when not moving
         },
     )
 
