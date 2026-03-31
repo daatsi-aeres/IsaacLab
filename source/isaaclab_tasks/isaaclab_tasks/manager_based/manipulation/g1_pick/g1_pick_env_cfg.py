@@ -49,96 +49,55 @@ def wuji_monolithic_reward(
         robot: Articulation = env.scene[robot_cfg.name]
         obj: RigidObject = env.scene[object_cfg.name]
 
-        # REMOVED the -0.03 shift so the fingers target the actual cube, not the tray!
-        object_pos = obj.data.root_pos_w.clone()
+        cube_pos = obj.data.root_pos_w.clone()
+        palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]] 
 
         # ==========================================
-        # 1. EXTRACT SEPARATE HAND AND TIP POSITIONS
+        # 1. THE BREADCRUMB: Get the palm over the cube
         # ==========================================
-        hand_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]] 
-        tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]  
-
-        thumb_pos = tips_w[:, 0]
-        index_pos = tips_w[:, 1]
-        middle_pos = tips_w[:, 2]
-
-        # ==========================================
-        # 2. PALM PRE-GRASP TARGET (Moved up so we can use it for gating)
-        # ==========================================
-        hand_object_pos = object_pos.clone()
-        hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.160 
-        hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.040  
-
-        hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
-        hand_object_rew = 1.0 - torch.tanh(hand_object_dist / 0.3)
+        palm_target = cube_pos.clone()
+        palm_target[:, 2] += 0.08  
         
-        r_close = 0.1
-        close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
+        palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
+        reach_rew = 1.0 - torch.tanh(palm_dist / 0.15)
 
         # ==========================================
-        # 3. OPPOSITION FINGERTIP REWARD (The Reach Gate)
+        # 2. THE CONTROL GATE (Stops the Volleyball Hack)
         # ==========================================
-        thumb_dist = torch.linalg.norm(thumb_pos - object_pos, dim=-1)
-        index_dist = torch.linalg.norm(index_pos - object_pos, dim=-1)
-        middle_dist = torch.linalg.norm(middle_pos - object_pos, dim=-1)
+        # The palm MUST be within 12cm of the cube. If it punches the cube away, this becomes False.
+        is_controlled = (palm_dist < 0.12)
 
-        thumb_err = torch.clamp(thumb_dist - 0.065, min=0.0)
-        opposing_err = torch.clamp(((index_dist + middle_dist) / 2.0) - 0.065, min=0.0)
+        # ==========================================
+        # 3. THE OUTCOME: Did the cube go up while controlled?
+        # ==========================================
+        lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
+        
+        # Multiply by is_controlled! No points for punching.
+        lift_cont_rew = lift_height * 100.0 * is_controlled.float()  
 
-        thumb_rew = 1.0 - torch.tanh(thumb_err / 0.05)
-        opposing_rew = 1.0 - torch.tanh(opposing_err / 0.05)
+        is_lifted = cube_pos[:, 2] > _SUCCESS_Z
+        success_bonus = is_lifted.float() * 50.0 * is_controlled.float()
 
-        # NEW: THE REACH GATE
-        # If the palm is far away from the pre-grasp target, this gate approaches 0.0. 
-        # The robot gets NO points for closing its fingers until the arm is in position.
-        reach_gate = 1.0 - torch.tanh(hand_object_dist / 0.10)
-
-        # Multiplicative Lock + Reach Gate
-        hand_finger_rew = thumb_rew * opposing_rew * reach_gate 
-
-        # Action Rate Penalty
+        # ==========================================
+        # 4. BASIC PENALTIES
+        # ==========================================
         actions = env.action_manager.action
         prev_actions = env.action_manager.prev_action
         action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
 
-        # ==========================================
-        # 4. STRICT GATING & LIFT CALCULATIONS
-        # ==========================================
-        is_grasped = (thumb_err < 0.02) & (opposing_err < 0.02)
-
-        lift_height = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
-        lift_cont_rew = lift_height * is_grasped.float()
-        
-        is_lifted = object_pos[:, 2] > _SUCCESS_Z
-        lift_rew = is_lifted.float() * is_grasped.float()
-        
-        goal_rew = is_lifted.float() * (1.0 - torch.tanh(hand_object_dist / 0.3)) * is_grasped.float()
-        goal_rew_fine_grained = is_lifted.float() * (1.0 - torch.tanh(hand_object_dist / 0.05)) * is_grasped.float()
+        is_dropped = cube_pos[:, 2] < _DROP_Z
 
         # ==========================================
-        # 5. TOTAL REWARD AGGREGATION
+        # 5. AGGREGATION
         # ==========================================
         reward = (
-            0.25 * hand_object_rew
-            + close_bonus
-            + 2.0 * hand_finger_rew      
-            - action_rate_penalty * action_penalty_scale
-            + lift_rew * 25.0
-            + goal_rew * 16.0
-            + goal_rew_fine_grained * 5.0
-            + lift_cont_rew * 80.0 
-            - 0.005 # Alive penalty
+            reach_rew * 2.0 +
+            lift_cont_rew +
+            success_bonus -
+            (action_rate_penalty * action_penalty_scale)
         )
 
-        # ==========================================
-        # 6. TERMINAL FAILURE PENALTY
-        # ==========================================
-        resets = torch.where(
-            obj.data.root_pos_w[:, 2] < _DROP_Z,
-            torch.ones_like(reward),
-            torch.zeros_like(reward)
-        )
-        reward = torch.where(resets == 1, torch.ones_like(reward) * -5.0, reward)
+        reward = torch.where(is_dropped, torch.ones_like(reward) * -50.0, reward)
 
         return reward
 
