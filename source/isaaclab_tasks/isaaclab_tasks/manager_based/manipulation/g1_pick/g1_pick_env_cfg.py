@@ -320,9 +320,7 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_rate_scale": 0.0005, # Heavily penalizes twitching/spasming
-            "joint_vel_scale": 0.0,  # Creates a "speed limit" to stop Mach 3 movements
-            "action_l2_scale": 0.0,   # Encourages the network to rest when not moving
+            "action_penalty_scale": 0.0005, # Updated to match the new function signature
         },
     )
 
