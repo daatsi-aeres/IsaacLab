@@ -30,7 +30,7 @@ G1_INSPIRE_CFG = ArticulationCfg(
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=False,
-            solver_position_iteration_count=8,
+            solver_position_iteration_count=32,
             solver_velocity_iteration_count=4,
             # fix_root_link=True, 
         ),
@@ -72,16 +72,16 @@ G1_INSPIRE_CFG = ArticulationCfg(
             "R_thumb_intermediate_joint": 0.0, # <-- Newly added!
             "R_thumb_distal_joint": 0.0,       # <-- Newly added!
             
-            "R_index_proximal_joint": 0.6,
+            "R_index_proximal_joint": 0.0,
             "R_index_intermediate_joint": 0.0, # <-- Newly added!
             
-            "R_middle_proximal_joint": 0.6,
+            "R_middle_proximal_joint": 0.0,
             "R_middle_intermediate_joint": 0.0, # <-- Newly added!
             
-            "R_ring_proximal_joint": 0.6,
+            "R_ring_proximal_joint": 0.0,
             "R_ring_intermediate_joint": 0.0, # <-- Newly added!
             
-            "R_pinky_proximal_joint": 0.6,
+            "R_pinky_proximal_joint": 0.0,
             "R_pinky_intermediate_joint": 0.0, # <-- Newly added!
             
             # ── Let's quickly do the left hand too, just to be safe ──

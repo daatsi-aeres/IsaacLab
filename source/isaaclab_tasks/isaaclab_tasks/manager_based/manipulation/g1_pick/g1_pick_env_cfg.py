@@ -49,8 +49,8 @@ def wuji_monolithic_reward(
         robot: Articulation = env.scene[robot_cfg.name]
         obj: RigidObject = env.scene[object_cfg.name]
 
+        # REMOVED the -0.03 shift so the fingers target the actual cube, not the tray!
         object_pos = obj.data.root_pos_w.clone()
-        object_pos[:, 2] = object_pos[:, 2] - 0.03 # Shift to tray surface
 
         # ==========================================
         # 1. EXTRACT SEPARATE HAND AND TIP POSITIONS
@@ -58,36 +58,12 @@ def wuji_monolithic_reward(
         hand_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]] 
         tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]  
 
-        # Explicitly extract the thumb and the primary opposing fingers
         thumb_pos = tips_w[:, 0]
         index_pos = tips_w[:, 1]
         middle_pos = tips_w[:, 2]
 
         # ==========================================
-        # 2. OPPOSITION FINGERTIP REWARD (Force the Thumb)
-        # ==========================================
-        thumb_dist = torch.linalg.norm(thumb_pos - object_pos, dim=-1)
-        index_dist = torch.linalg.norm(index_pos - object_pos, dim=-1)
-        middle_dist = torch.linalg.norm(middle_pos - object_pos, dim=-1)
-
-        # Apply a 5cm standoff (0.05m) to account for finger length and prevent knuckle smashing
-        thumb_err = torch.clamp(thumb_dist - 0.05, min=0.0)
-        
-        # Average the index and middle finger distance for a stable tripod pinch
-        opposing_err = torch.clamp(((index_dist + middle_dist) / 2.0) - 0.05, min=0.0)
-
-        # MULTIPLICATIVE REWARD: Both sides of the hand must close in, or the reward is zero.
-        thumb_rew = 1.0 - torch.tanh(thumb_err / 0.05)
-        opposing_rew = 1.0 - torch.tanh(opposing_err / 0.05)
-        hand_finger_rew = thumb_rew * opposing_rew 
-
-        # Action Rate Penalty
-        actions = env.action_manager.action
-        prev_actions = env.action_manager.prev_action
-        action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
-
-        # ==========================================
-        # 3. PALM PRE-GRASP TARGET
+        # 2. PALM PRE-GRASP TARGET (Moved up so we can use it for gating)
         # ==========================================
         hand_object_pos = object_pos.clone()
         hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.160 
@@ -100,12 +76,36 @@ def wuji_monolithic_reward(
         close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
 
         # ==========================================
+        # 3. OPPOSITION FINGERTIP REWARD (The Reach Gate)
+        # ==========================================
+        thumb_dist = torch.linalg.norm(thumb_pos - object_pos, dim=-1)
+        index_dist = torch.linalg.norm(index_pos - object_pos, dim=-1)
+        middle_dist = torch.linalg.norm(middle_pos - object_pos, dim=-1)
+
+        thumb_err = torch.clamp(thumb_dist - 0.065, min=0.0)
+        opposing_err = torch.clamp(((index_dist + middle_dist) / 2.0) - 0.065, min=0.0)
+
+        thumb_rew = 1.0 - torch.tanh(thumb_err / 0.05)
+        opposing_rew = 1.0 - torch.tanh(opposing_err / 0.05)
+
+        # NEW: THE REACH GATE
+        # If the palm is far away from the pre-grasp target, this gate approaches 0.0. 
+        # The robot gets NO points for closing its fingers until the arm is in position.
+        reach_gate = 1.0 - torch.tanh(hand_object_dist / 0.10)
+
+        # Multiplicative Lock + Reach Gate
+        hand_finger_rew = thumb_rew * opposing_rew * reach_gate 
+
+        # Action Rate Penalty
+        actions = env.action_manager.action
+        prev_actions = env.action_manager.prev_action
+        action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
+
+        # ==========================================
         # 4. STRICT GATING & LIFT CALCULATIONS
         # ==========================================
-        # The robot only gets lift points if the thumb and opposing fingers are physically engaged!
         is_grasped = (thumb_err < 0.02) & (opposing_err < 0.02)
 
-        # Gated lifting rewards
         lift_height = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
         lift_cont_rew = lift_height * is_grasped.float()
         
@@ -121,7 +121,7 @@ def wuji_monolithic_reward(
         reward = (
             0.25 * hand_object_rew
             + close_bonus
-            + 2.0 * hand_finger_rew      # Bumped up weight so it really wants to form the pinch
+            + 2.0 * hand_finger_rew      
             - action_rate_penalty * action_penalty_scale
             + lift_rew * 25.0
             + goal_rew * 16.0
