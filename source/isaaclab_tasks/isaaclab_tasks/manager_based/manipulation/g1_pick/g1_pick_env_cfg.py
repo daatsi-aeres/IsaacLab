@@ -41,89 +41,106 @@ _RIGHT_HAND_BODIES = [
 ]
 
 def wuji_monolithic_reward(
-    env: ManagerBasedRLEnv,
-    robot_cfg: SceneEntityCfg,
-    object_cfg: SceneEntityCfg,
-    action_rate_scale: float = 0.005, 
-    joint_vel_scale: float = 0.0005,   
-    action_l2_scale: float = 0.001,    
-) -> torch.Tensor:
-    robot: Articulation = env.scene[robot_cfg.name]
-    obj: RigidObject = env.scene[object_cfg.name]
+        env: ManagerBasedRLEnv,
+        robot_cfg: SceneEntityCfg,
+        object_cfg: SceneEntityCfg,
+        action_penalty_scale: float = 1.0,
+    ) -> torch.Tensor:
+        robot: Articulation = env.scene[robot_cfg.name]
+        obj: RigidObject = env.scene[object_cfg.name]
 
-    # 1. EXTRACT COORDINATES & VELOCITIES
-    cube_pos = obj.data.root_pos_w.clone()
-    palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]]
-    tips_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
-    joint_vels = robot.data.joint_vel 
+        object_pos = obj.data.root_pos_w.clone()
+        object_pos[:, 2] = object_pos[:, 2] - 0.03 # Shift to tray surface
 
-    # Isolate Thumb and Index finger positions
-    # tips_pos[:, 0] is R_thumb_distal, tips_pos[:, 1] is R_index_intermediate
-    thumb_pos = tips_pos[:, 0]
-    index_pos = tips_pos[:, 1]
+        # ==========================================
+        # 1. EXTRACT SEPARATE HAND AND TIP POSITIONS
+        # ==========================================
+        hand_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]] 
+        tips_w = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]  
 
-    # 2. TOP-DOWN POSTURE
-    palm_target = cube_pos.clone()
-    palm_target[:, 2] += 0.08  
-    palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
-    posture_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.03, min=0.0) / 0.3)
+        # Explicitly extract the thumb and the primary opposing fingers
+        thumb_pos = tips_w[:, 0]
+        index_pos = tips_w[:, 1]
+        middle_pos = tips_w[:, 2]
 
-    # 3. VIRTUAL PINCH ALIGNMENT
-    # Calculate the invisible point exactly halfway between the thumb and index finger
-    pinch_midpoint = (thumb_pos + index_pos) / 2.0
-    
-    # Reward aligning this empty space directly over the center of the cube
-    pinch_align_dist = torch.linalg.norm(pinch_midpoint - cube_pos, dim=-1)
-    reach_rew = 1.0 - torch.tanh(pinch_align_dist / 0.15)
+        # ==========================================
+        # 2. OPPOSITION FINGERTIP REWARD (Force the Thumb)
+        # ==========================================
+        thumb_dist = torch.linalg.norm(thumb_pos - object_pos, dim=-1)
+        index_dist = torch.linalg.norm(index_pos - object_pos, dim=-1)
+        middle_dist = torch.linalg.norm(middle_pos - object_pos, dim=-1)
 
-    # 4. PINCH SQUEEZE (Surface Distance)
-    # The fingers must close in on the surface (0.025m radius) to get the squeeze reward, preventing clipping
-    thumb_surface_dist = torch.clamp(torch.linalg.norm(thumb_pos - cube_pos, dim=-1) - 0.025, min=0.0)
-    index_surface_dist = torch.clamp(torch.linalg.norm(index_pos - cube_pos, dim=-1) - 0.025, min=0.0)
-    
-    # Average the surface distance of JUST the two pinch fingers
-    squeeze_dist = (thumb_surface_dist + index_surface_dist) / 2.0
-    grasp_rew = 1.0 - torch.tanh(squeeze_dist / 0.10) 
+        # Apply a 5cm standoff (0.05m) to account for finger length and prevent knuckle smashing
+        thumb_err = torch.clamp(thumb_dist - 0.05, min=0.0)
+        
+        # Average the index and middle finger distance for a stable tripod pinch
+        opposing_err = torch.clamp(((index_dist + middle_dist) / 2.0) - 0.05, min=0.0)
 
-    # ==========================================
-    # 5. LIFT & SUCCESS (STRICT GATE)
-    # ==========================================
-    # The robot is ONLY grasping if BOTH the thumb and index are practically touching the surface (within 1.5cm)
-    is_grasped = (thumb_surface_dist < 0.015) & (index_surface_dist < 0.015)
+        # MULTIPLICATIVE REWARD: Both sides of the hand must close in, or the reward is zero.
+        thumb_rew = 1.0 - torch.tanh(thumb_err / 0.05)
+        opposing_rew = 1.0 - torch.tanh(opposing_err / 0.05)
+        hand_finger_rew = thumb_rew * opposing_rew 
 
-    lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
-    
-    # Multiply the lift rewards by is_grasped.float(). 
-    # If the policy tries to uppercut or pinky-wrap, is_grasped becomes 0.0, instantly zeroing out the reward.
-    lift_cont_rew = lift_height * 50.0 * is_grasped.float() 
+        # Action Rate Penalty
+        actions = env.action_manager.action
+        prev_actions = env.action_manager.prev_action
+        action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
 
-    is_lifted = cube_pos[:, 2] > _SUCCESS_Z
-    success_bonus = is_lifted.float() * 25.0 * is_grasped.float()
+        # ==========================================
+        # 3. PALM PRE-GRASP TARGET
+        # ==========================================
+        hand_object_pos = object_pos.clone()
+        hand_object_pos[:, 0] = hand_object_pos[:, 0] - 0.160 
+        hand_object_pos[:, 2] = hand_object_pos[:, 2] + 0.040  
 
-    # 6. PENALTIES & AGGREGATION
-    actions = env.action_manager.action
-    prev_actions = env.action_manager.prev_action
-    
-    action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
-    joint_vel_penalty = torch.sum(torch.square(joint_vels), dim=-1)
-    action_l2_penalty = torch.sum(torch.square(actions), dim=-1)
+        hand_object_dist = torch.linalg.norm(hand_pos - hand_object_pos, dim=-1)
+        hand_object_rew = 1.0 - torch.tanh(hand_object_dist / 0.3)
+        
+        r_close = 0.1
+        close_bonus = (r_close - hand_object_dist).clamp(min=0.0) / r_close
 
-    is_dropped = cube_pos[:, 2] < _DROP_Z
+        # ==========================================
+        # 4. STRICT GATING & LIFT CALCULATIONS
+        # ==========================================
+        # The robot only gets lift points if the thumb and opposing fingers are physically engaged!
+        is_grasped = (thumb_err < 0.02) & (opposing_err < 0.02)
 
-    reward = (
-        posture_rew * 0.5 +   
-        reach_rew * 1.5 +     
-        grasp_rew * 2.0 +     
-        lift_cont_rew +
-        success_bonus -
-        (action_rate_penalty * action_rate_scale) -
-        (joint_vel_penalty * joint_vel_scale) -
-        (action_l2_penalty * action_l2_scale)
-    )
+        # Gated lifting rewards
+        lift_height = (object_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
+        lift_cont_rew = lift_height * is_grasped.float()
+        
+        is_lifted = object_pos[:, 2] > _SUCCESS_Z
+        lift_rew = is_lifted.float() * is_grasped.float()
+        
+        goal_rew = is_lifted.float() * (1.0 - torch.tanh(hand_object_dist / 0.3)) * is_grasped.float()
+        goal_rew_fine_grained = is_lifted.float() * (1.0 - torch.tanh(hand_object_dist / 0.05)) * is_grasped.float()
 
-    reward = torch.where(is_dropped, torch.ones_like(reward) * -10.0, reward)
+        # ==========================================
+        # 5. TOTAL REWARD AGGREGATION
+        # ==========================================
+        reward = (
+            0.25 * hand_object_rew
+            + close_bonus
+            + 2.0 * hand_finger_rew      # Bumped up weight so it really wants to form the pinch
+            - action_rate_penalty * action_penalty_scale
+            + lift_rew * 25.0
+            + goal_rew * 16.0
+            + goal_rew_fine_grained * 5.0
+            + lift_cont_rew * 80.0 
+            - 0.005 # Alive penalty
+        )
 
-    return reward
+        # ==========================================
+        # 6. TERMINAL FAILURE PENALTY
+        # ==========================================
+        resets = torch.where(
+            obj.data.root_pos_w[:, 2] < _DROP_Z,
+            torch.ones_like(reward),
+            torch.zeros_like(reward)
+        )
+        reward = torch.where(resets == 1, torch.ones_like(reward) * -5.0, reward)
+
+        return reward
 
 @configclass
 class SceneCfg(InteractiveSceneCfg):
