@@ -90,10 +90,10 @@ def wuji_monolithic_reward(
         
         # Soft-gating: We multiply by the palm reward instead of a strict True/False boolean.
         # This prevents the "volleyball punch" but completely eliminates "hovering anxiety".
-        lift_cont_rew = lift_height * 80.0 * reach_rew  
+        lift_cont_rew = lift_height * 20.0 * reach_rew  
 
         is_lifted = cube_pos[:, 2] > _SUCCESS_Z
-        success_bonus = is_lifted.float() * 50.0 * reach_rew
+        success_bonus = is_lifted.float() * 30.0 * reach_rew
 
         # ==========================================
         # 4. PENALTIES & AGGREGATION
@@ -113,7 +113,7 @@ def wuji_monolithic_reward(
             (action_rate_penalty * action_penalty_scale)
         )
 
-        reward = torch.where(is_dropped, torch.ones_like(reward) * -10.0, reward)
+        reward = torch.where(is_dropped, torch.ones_like(reward) * -5.0, reward)
 
         return reward
 
@@ -221,7 +221,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=0.3, # Action scale maps policy outputs [-1, 1] to larger joint position targets
+        scale=0.1, # Action scale maps policy outputs [-1, 1] to larger joint position targets
         use_default_offset=True, # Actions are relative to the ideal starting posture
     )
     
@@ -231,7 +231,7 @@ class ActionsCfg:
             "R_thumb_proximal_yaw_joint", "R_thumb_proximal_pitch_joint", "R_index_proximal_joint",
             "R_middle_proximal_joint", "R_ring_proximal_joint", "R_pinky_proximal_joint",
         ],
-        scale=1.0, # Fingers need finer control, so we use a smaller action scale
+        scale=0.1, # Fingers need finer control, so we use a smaller action scale
         use_default_offset=True,
     )
 
@@ -425,9 +425,9 @@ class G1RightArmLiftEnvCfg_V2(ManagerBasedRLEnvCfg):
     
     def __post_init__(self):
             # --- BASIC SIMULATION SETTINGS ---
-            self.decimation = 4             
+            self.decimation = 8             
             self.episode_length_s = 8.0     
-            self.sim.dt = 1 / 120           
+            self.sim.dt = 1 / 240           
             self.sim.render_interval = self.decimation
             self.sim.physx.bounce_threshold_velocity = 0.2
 
