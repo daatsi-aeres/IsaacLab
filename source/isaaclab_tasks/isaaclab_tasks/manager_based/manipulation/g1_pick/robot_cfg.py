@@ -67,8 +67,8 @@ G1_INSPIRE_CFG = ArticulationCfg(
             "left_wrist_yaw_joint": 0.0,
 
             # ── Inspire Right Hand (ALL 12 JOINTS EXPLICITLY INITIALIZED) ──
-            "R_thumb_proximal_yaw_joint": 0.5,
-            "R_thumb_proximal_pitch_joint": 0.25,
+            "R_thumb_proximal_yaw_joint": 0.7, 
+            "R_thumb_proximal_pitch_joint": 0.0,
             "R_thumb_intermediate_joint": 0.0, # <-- Newly added!
             "R_thumb_distal_joint": 0.0,       # <-- Newly added!
             

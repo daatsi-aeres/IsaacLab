@@ -50,36 +50,53 @@ def wuji_monolithic_reward(
         obj: RigidObject = env.scene[object_cfg.name]
 
         cube_pos = obj.data.root_pos_w.clone()
-        palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]] 
-
-        # ==========================================
-        # 1. THE BREADCRUMB: Get the palm over the cube
-        # ==========================================
-        palm_target = cube_pos.clone()
-        palm_target[:, 2] += 0.08  
         
+        # We need both palm and tips
+        palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]] 
+        tips_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
+
+        # ==========================================
+        # 1. THE ANCHOR & THE MAGNET (Arm Guidance)
+        # ==========================================
+        # We bring back your highly successful 16cm runway!
+        palm_target = cube_pos.clone()
+        palm_target[:, 0] = palm_target[:, 0] - 0.160 
+        palm_target[:, 2] = palm_target[:, 2] + 0.040  
+
         palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
-        reach_rew = 1.0 - torch.tanh(palm_dist / 0.15)
+        reach_rew = 1.0 - torch.tanh(palm_dist / 0.3)
+        
+        # Bring back the linear magnet! Snaps the arm into place when within 10cm.
+        close_bonus = (0.1 - palm_dist).clamp(min=0.0) / 0.1
 
         # ==========================================
-        # 2. THE CONTROL GATE (Stops the Volleyball Hack)
+        # 2. THE TRAY SCRAPE (Finger Guidance)
         # ==========================================
-        # The palm MUST be within 12cm of the cube. If it punches the cube away, this becomes False.
-        is_controlled = (palm_dist < 0.12)
+        # We shift the target for the fingers DOWN into the tray, just like your old code.
+        finger_target = cube_pos.clone()
+        finger_target[:, 2] = finger_target[:, 2] - 0.03 
+
+        # Simple average distance of all fingers to the bottom of the cube
+        dists = torch.linalg.norm(tips_pos - finger_target.unsqueeze(1), dim=-1)
+        fingertip_dist_avg = dists.mean(dim=1)
+        
+        # We multiply by reach_rew so it doesn't close its fist while flying through the air
+        hand_finger_rew = (1.0 - torch.tanh(fingertip_dist_avg / 0.1)) * reach_rew
 
         # ==========================================
-        # 3. THE OUTCOME: Did the cube go up while controlled?
+        # 3. THE OUTCOME (Lifting)
         # ==========================================
         lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
         
-        # Multiply by is_controlled! No points for punching.
-        lift_cont_rew = lift_height * 100.0 * is_controlled.float()  
+        # Soft-gating: We multiply by the palm reward instead of a strict True/False boolean.
+        # This prevents the "volleyball punch" but completely eliminates "hovering anxiety".
+        lift_cont_rew = lift_height * 80.0 * reach_rew  
 
         is_lifted = cube_pos[:, 2] > _SUCCESS_Z
-        success_bonus = is_lifted.float() * 50.0 * is_controlled.float()
+        success_bonus = is_lifted.float() * 50.0 * reach_rew
 
         # ==========================================
-        # 4. BASIC PENALTIES
+        # 4. PENALTIES & AGGREGATION
         # ==========================================
         actions = env.action_manager.action
         prev_actions = env.action_manager.prev_action
@@ -87,17 +104,16 @@ def wuji_monolithic_reward(
 
         is_dropped = cube_pos[:, 2] < _DROP_Z
 
-        # ==========================================
-        # 5. AGGREGATION
-        # ==========================================
         reward = (
-            reach_rew * 2.0 +
-            lift_cont_rew +
+            reach_rew * 0.5 +         # Get to the runway
+            close_bonus * 1.0 +       # Magnet to the exact spot
+            hand_finger_rew * 1.5 +   # Scrape the fingers under the cube
+            lift_cont_rew +           # MASSIVE points for going up
             success_bonus -
             (action_rate_penalty * action_penalty_scale)
         )
 
-        reward = torch.where(is_dropped, torch.ones_like(reward) * -50.0, reward)
+        reward = torch.where(is_dropped, torch.ones_like(reward) * -10.0, reward)
 
         return reward
 
