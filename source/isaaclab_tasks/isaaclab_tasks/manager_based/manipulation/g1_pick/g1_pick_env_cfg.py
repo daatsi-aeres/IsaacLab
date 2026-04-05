@@ -90,7 +90,7 @@ def wuji_monolithic_reward(
     lift_height   = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
     # Only reward upward movement if palm is already near the cube
     palm_near = (1.0 - torch.tanh(palm_dist / 0.15))  # soft gate, fires at ~15cm
-    lift_attempt_rew = lift_height * 2.0 * palm_near
+    lift_attempt_rew = lift_height * 20.0 * palm_near
 
     lift_cont_rew = lift_height * 50.0 * is_grasped
     is_lifted     = cube_pos[:, 2] > _SUCCESS_Z
