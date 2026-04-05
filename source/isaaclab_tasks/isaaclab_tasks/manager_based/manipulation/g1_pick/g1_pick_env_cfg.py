@@ -41,81 +41,82 @@ _RIGHT_HAND_BODIES = [
 ]
 
 def wuji_monolithic_reward(
-        env: ManagerBasedRLEnv,
-        robot_cfg: SceneEntityCfg,
-        object_cfg: SceneEntityCfg,
-        action_penalty_scale: float = 1.0,
-    ) -> torch.Tensor:
-        robot: Articulation = env.scene[robot_cfg.name]
-        obj: RigidObject = env.scene[object_cfg.name]
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg,
+    action_rate_scale: float = 0.005, 
+    joint_vel_scale: float = 0.0005,   
+    action_l2_scale: float = 0.001,    
+) -> torch.Tensor:
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
 
-        cube_pos = obj.data.root_pos_w.clone()
-        
-        # We need both palm and tips
-        palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]] 
-        tips_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
+    # 1. EXTRACT
+    cube_pos   = obj.data.root_pos_w.clone()
+    palm_pos   = robot.data.body_pos_w[:, robot_cfg.body_ids[0]]
+    tips_pos   = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
+    joint_vels = robot.data.joint_vel
 
-        # ==========================================
-        # 1. THE ANCHOR & THE MAGNET (Arm Guidance)
-        # ==========================================
-        # We bring back your highly successful 16cm runway!
-        palm_target = cube_pos.clone()
-        palm_target[:, 0] = palm_target[:, 0] - 0.160 
-        palm_target[:, 2] = palm_target[:, 2] + 0.040  
+    # Distances - scalars [N]
+    thumb_dist  = torch.linalg.norm(tips_pos[:, 0:1] - cube_pos.unsqueeze(1), dim=-1).squeeze(1)
+    finger_dist = torch.linalg.norm(tips_pos[:, 1:]  - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
 
-        palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
-        reach_rew = 1.0 - torch.tanh(palm_dist / 0.3)
-        
-        # Bring back the linear magnet! Snaps the arm into place when within 10cm.
-        close_bonus = (0.1 - palm_dist).clamp(min=0.0) / 0.1
+    # 2. POSTURE - palm 8cm above cube
+    palm_target = cube_pos.clone()
+    palm_target[:, 2] += 0.08
+    palm_dist   = torch.linalg.norm(palm_pos - palm_target, dim=-1)
+    posture_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.03, min=0.0) / 0.3)
 
-        # ==========================================
-        # 2. THE TRAY SCRAPE (Finger Guidance)
-        # ==========================================
-        # We shift the target for the fingers DOWN into the tray, just like your old code.
-        finger_target = cube_pos.clone()
-        finger_target[:, 2] = finger_target[:, 2] - 0.03 
+    # 3. REACH - 3D midpoint of fingertips toward cube center
+    # tips_pos is [N, 5, 3], mean over finger dim gives [N, 3] position
+    fingertip_midpoint = tips_pos.mean(dim=1)                              # [N, 3]
+    midpoint_dist = torch.linalg.norm(fingertip_midpoint - cube_pos, dim=-1)  # [N]
+    reach_rew = 1.0 - torch.tanh(midpoint_dist / 0.25)
 
-        # Simple average distance of all fingers to the bottom of the cube
-        dists = torch.linalg.norm(tips_pos - finger_target.unsqueeze(1), dim=-1)
-        fingertip_dist_avg = dists.mean(dim=1)
-        
-        # We multiply by reach_rew so it doesn't close its fist while flying through the air
-        hand_finger_rew = (1.0 - torch.tanh(fingertip_dist_avg / 0.1)) * reach_rew
+    # 4. GRASP - separate thumb vs finger shaping, mirrors is_grasped structure
+    thumb_grasp_rew  = 1.0 - torch.tanh(thumb_dist  / 0.055)
+    finger_grasp_rew = 1.0 - torch.tanh(finger_dist / 0.055)
+    grasp_rew        = (thumb_grasp_rew + finger_grasp_rew) / 2.0
 
-        # ==========================================
-        # 3. THE OUTCOME (Lifting)
-        # ==========================================
-        lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0)
-        
-        # Soft-gating: We multiply by the palm reward instead of a strict True/False boolean.
-        # This prevents the "volleyball punch" but completely eliminates "hovering anxiety".
-        lift_cont_rew = lift_height * 20.0 * reach_rew  
+    # 5. SOFT GATE
+    _T        = 0.058
+    is_grasped = (1.0 - torch.tanh(thumb_dist / _T)) * (1.0 - torch.tanh(finger_dist / _T))
 
-        is_lifted = cube_pos[:, 2] > _SUCCESS_Z
-        success_bonus = is_lifted.float() * 30.0 * reach_rew
 
-        # ==========================================
-        # 4. PENALTIES & AGGREGATION
-        # ==========================================
-        actions = env.action_manager.action
-        prev_actions = env.action_manager.prev_action
-        action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
+    lift_height   = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
+    # Only reward upward movement if palm is already near the cube
+    palm_near = (1.0 - torch.tanh(palm_dist / 0.15))  # soft gate, fires at ~15cm
+    lift_attempt_rew = lift_height * 2.0 * palm_near
+    
+    lift_cont_rew = lift_height * 50.0 * is_grasped
+    is_lifted     = cube_pos[:, 2] > _SUCCESS_Z
+    success_bonus = is_lifted.float() * 25.0 * is_grasped
 
-        is_dropped = cube_pos[:, 2] < _DROP_Z
+    # 6. PENALTIES & AGGREGATION
+    actions = env.action_manager.action
+    prev_actions = env.action_manager.prev_action
+    
+    action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
+    joint_vel_penalty = torch.sum(torch.square(joint_vels), dim=-1)
+    action_l2_penalty = torch.sum(torch.square(actions), dim=-1)
 
-        reward = (
-            reach_rew * 0.5 +         # Get to the runway
-            close_bonus * 1.0 +       # Magnet to the exact spot
-            hand_finger_rew * 1.5 +   # Scrape the fingers under the cube
-            lift_cont_rew +           # MASSIVE points for going up
-            success_bonus -
-            (action_rate_penalty * action_penalty_scale)
-        )
+    is_dropped = cube_pos[:, 2] < _DROP_Z
 
-        reward = torch.where(is_dropped, torch.ones_like(reward) * -5.0, reward)
+    reward = (
+        posture_rew * 1.0 +   
+        reach_rew * 1.0 +     
+        grasp_rew * 2.0 + 
+        lift_attempt_rew +    
+        lift_cont_rew +
+        success_bonus -
+        (action_rate_penalty * action_rate_scale) -
+        (joint_vel_penalty * joint_vel_scale) -
+        (action_l2_penalty * action_l2_scale)
+    )
 
-        return reward
+    reward = torch.where(is_dropped, torch.ones_like(reward) * -1.0, reward)
+
+    return reward
 
 @configclass
 class SceneCfg(InteractiveSceneCfg):
@@ -221,7 +222,7 @@ class ActionsCfg:
             "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
             "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
         ],
-        scale=0.1, # Action scale maps policy outputs [-1, 1] to larger joint position targets
+        scale=0.3, # Action scale maps policy outputs [-1, 1] to larger joint position targets
         use_default_offset=True, # Actions are relative to the ideal starting posture
     )
     
@@ -231,7 +232,7 @@ class ActionsCfg:
             "R_thumb_proximal_yaw_joint", "R_thumb_proximal_pitch_joint", "R_index_proximal_joint",
             "R_middle_proximal_joint", "R_ring_proximal_joint", "R_pinky_proximal_joint",
         ],
-        scale=0.1, # Fingers need finer control, so we use a smaller action scale
+        scale=0.5, # Fingers need finer control, so we use a smaller action scale
         use_default_offset=True,
     )
 
@@ -295,7 +296,9 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_penalty_scale": 0.0005, # Updated to match the new function signature
+            "action_rate_scale": 0.0005, # Heavily penalizes twitching/spasming
+            "joint_vel_scale": 0.0001,  # Creates a "speed limit" to stop Mach 3 movements
+            "action_l2_scale": 0.0,   # Encourages the network to rest when not moving
         },
     )
 
@@ -367,32 +370,32 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.10, 0.10), "y": (-0.05, 0.05), "z": (0.01, 0.01)},
+            "pose_range": {"x": (-0.10, 0.10), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("target_object"),
         },
     )
 
-    apply_high_friction_to_fingers = EventTerm(
-        func=mdp.randomize_rigid_body_material,
-        mode="startup", # Only runs once when the environment boots up
-        params={
-            "asset_cfg": SceneEntityCfg(
-                "robot", 
-                body_names=[
-                    "R_thumb_distal", 
-                    "R_index_intermediate", 
-                    "R_middle_intermediate", 
-                    "R_ring_intermediate", 
-                    "R_pinky_intermediate"
-                ]
-            ),
-            "static_friction_range": (1.5, 1.5),   # Min and Max are the same to force an exact value
-            "dynamic_friction_range": (1.5, 1.5),
-            "restitution_range": (0.0, 0.0),       # Zero bounciness
-            "num_buckets": 1,                      # All fingers share this one material
-        },
-    )
+    # apply_high_friction_to_fingers = EventTerm(
+    #     func=mdp.randomize_rigid_body_material,
+    #     mode="startup", # Only runs once when the environment boots up
+    #     params={
+    #         "asset_cfg": SceneEntityCfg(
+    #             "robot", 
+    #             body_names=[
+    #                 "R_thumb_distal", 
+    #                 "R_index_intermediate", 
+    #                 "R_middle_intermediate", 
+    #                 "R_ring_intermediate", 
+    #                 "R_pinky_intermediate"
+    #             ]
+    #         ),
+    #         "static_friction_range": (1.5, 1.5),   # Min and Max are the same to force an exact value
+    #         "dynamic_friction_range": (1.5, 1.5),
+    #         "restitution_range": (0.0, 0.0),       # Zero bounciness
+    #         "num_buckets": 1,                      # All fingers share this one material
+    #     },
+    # )
 
 @configclass
 class TerminationsCfg:
@@ -425,9 +428,9 @@ class G1RightArmLiftEnvCfg_V2(ManagerBasedRLEnvCfg):
     
     def __post_init__(self):
             # --- BASIC SIMULATION SETTINGS ---
-            self.decimation = 8             
+            self.decimation = 4             
             self.episode_length_s = 8.0     
-            self.sim.dt = 1 / 240           
+            self.sim.dt = 1 / 120           
             self.sim.render_interval = self.decimation
             self.sim.physx.bounce_threshold_velocity = 0.2
 
