@@ -84,7 +84,8 @@ def wuji_monolithic_reward(
 
     # 5. SOFT GATE
     _T        = 0.04
-    is_grasped = (1.0 - torch.tanh(thumb_dist / _T)) * (1.0 - torch.tanh(finger_dist / _T))
+    thumb_is_active = (thumb_dist < 0.01).float()
+    is_grasped = (1.0 - torch.tanh(thumb_dist / _T)) * (1.0 - torch.tanh(finger_dist / _T)) * thumb_is_active
 
 
     lift_height   = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
@@ -153,7 +154,7 @@ class SceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/TargetObject",
         spawn=sim_utils.CuboidCfg(
             size=(0.05, 0.05, 0.05), # Reduced to 5cm to require higher dexterity from the policy
-            physics_material=RigidBodyMaterialCfg(static_friction=1.5, dynamic_friction=1.5), # High friction prevents slipping
+            physics_material=RigidBodyMaterialCfg(static_friction=0.5, dynamic_friction=0.5), # High friction prevents slipping
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 solver_position_iteration_count=16, # High iterations ensure stable grasping physics
