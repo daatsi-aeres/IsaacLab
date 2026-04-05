@@ -58,8 +58,12 @@ def wuji_monolithic_reward(
     joint_vels = robot.data.joint_vel
 
     # Distances - scalars [N]
-    thumb_dist  = torch.linalg.norm(tips_pos[:, 0:1] - cube_pos.unsqueeze(1), dim=-1).squeeze(1)
-    finger_dist = torch.linalg.norm(tips_pos[:, 1:]  - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
+    raw_thumb_dist  = torch.linalg.norm(tips_pos[:, 0:1] - cube_pos.unsqueeze(1), dim=-1).squeeze(1)
+    raw_finger_dist = torch.linalg.norm(tips_pos[:, 1:]  - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
+
+    # Shift the zero-point to the surface of the 5cm cube (radius = 0.025m)
+    thumb_dist = torch.clamp(raw_thumb_dist - 0.025, min=0.0)
+    finger_dist = torch.clamp(raw_finger_dist - 0.025, min=0.0)
 
     # 2. POSTURE - palm 8cm above cube
     palm_target = cube_pos.clone()
@@ -79,7 +83,7 @@ def wuji_monolithic_reward(
     grasp_rew        = (thumb_grasp_rew + finger_grasp_rew) / 2.0
 
     # 5. SOFT GATE
-    _T        = 0.058
+    _T        = 0.04
     is_grasped = (1.0 - torch.tanh(thumb_dist / _T)) * (1.0 - torch.tanh(finger_dist / _T))
 
 
@@ -87,7 +91,7 @@ def wuji_monolithic_reward(
     # Only reward upward movement if palm is already near the cube
     palm_near = (1.0 - torch.tanh(palm_dist / 0.15))  # soft gate, fires at ~15cm
     lift_attempt_rew = lift_height * 2.0 * palm_near
-    
+
     lift_cont_rew = lift_height * 50.0 * is_grasped
     is_lifted     = cube_pos[:, 2] > _SUCCESS_Z
     success_bonus = is_lifted.float() * 25.0 * is_grasped
