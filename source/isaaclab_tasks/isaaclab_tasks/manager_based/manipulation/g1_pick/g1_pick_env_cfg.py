@@ -83,7 +83,7 @@ def wuji_monolithic_reward(
     grasp_rew        = (thumb_grasp_rew + finger_grasp_rew) / 2.0
 
     # 5. SOFT GATE
-    _T        = 0.05
+    _T        = 0.06
     is_grasped = (1.0 - torch.tanh(thumb_dist / _T)) * (1.0 - torch.tanh(finger_dist / _T)) 
 
 
