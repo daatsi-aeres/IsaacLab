@@ -35,3 +35,14 @@ def target_object_dropped(
     target_object: RigidObject = env.scene[object_cfg.name]
     object_height = target_object.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
     return object_height < minimum_height
+
+
+def target_object_lifted(
+    env: ManagerBasedRLEnv,
+    success_height: float,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("target_object"),
+) -> torch.Tensor:
+    """Termination condition when target object is lifted above success height."""
+    target_object: RigidObject = env.scene[object_cfg.name]
+    object_height = target_object.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
+    return object_height > success_height

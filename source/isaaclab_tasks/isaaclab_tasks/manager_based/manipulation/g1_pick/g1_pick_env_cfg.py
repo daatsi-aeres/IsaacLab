@@ -56,6 +56,21 @@ def distractor_velocity_penalty(
     return total / 3.0
 
 
+def distractor_drop_penalty(
+    env: ManagerBasedRLEnv,
+    minimum_height: float,
+    distractor_1_cfg: SceneEntityCfg,
+    distractor_2_cfg: SceneEntityCfg,
+    distractor_3_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Sparse penalty: returns 1.0 if ANY distractor fell below minimum_height."""
+    any_dropped = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    for cfg in [distractor_1_cfg, distractor_2_cfg, distractor_3_cfg]:
+        obj: RigidObject = env.scene[cfg.name]
+        any_dropped |= obj.data.root_pos_w[:, 2] < minimum_height
+    return any_dropped.float()
+
+
 def wuji_monolithic_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
@@ -196,7 +211,7 @@ class SceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.50, 0.10, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.42, 0.08, _OBJ_INIT_Z]),
     )
 
     distractor_2: RigidObjectCfg = RigidObjectCfg(
@@ -213,7 +228,7 @@ class SceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.50, -0.10, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.42, -0.08, _OBJ_INIT_Z]),
     )
 
     distractor_3: RigidObjectCfg = RigidObjectCfg(
@@ -230,7 +245,7 @@ class SceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.42, 0.0, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.38, 0.0, _OBJ_INIT_Z]),
     )
 
     plane = AssetBaseCfg(
@@ -388,8 +403,19 @@ class RewardsCfg:
 
     distractor_penalty = RewTerm(
         func=distractor_velocity_penalty,
-        weight=-0.3,
+        weight=-5.0,
         params={
+            "distractor_1_cfg": SceneEntityCfg("distractor_1"),
+            "distractor_2_cfg": SceneEntityCfg("distractor_2"),
+            "distractor_3_cfg": SceneEntityCfg("distractor_3"),
+        },
+    )
+
+    distractor_drop = RewTerm(
+        func=distractor_drop_penalty,
+        weight=-50.0,
+        params={
+            "minimum_height": _DROP_Z,
             "distractor_1_cfg": SceneEntityCfg("distractor_1"),
             "distractor_2_cfg": SceneEntityCfg("distractor_2"),
             "distractor_3_cfg": SceneEntityCfg("distractor_3"),
@@ -527,12 +553,45 @@ class TerminationsCfg:
     # Resets the episode if the agent takes too long (8.0 seconds based on episode_length_s)
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
+    # End episode on successful lift — no wasted sim time after the task is done
+    target_lifted = DoneTerm(
+        func=mdp.target_object_lifted,
+        params={
+            "success_height": _SUCCESS_Z * 1.2,
+            "object_cfg": SceneEntityCfg("target_object"),
+        },
+    )
+
     # Instantly resets the environment if the cube falls off the table, preventing wasted simulation time
     target_dropped = DoneTerm(
         func=mdp.target_object_dropped,
         params={
             "minimum_height": _DROP_Z,
             "object_cfg": SceneEntityCfg("target_object"),
+        },
+    )
+
+    distractor_1_dropped = DoneTerm(
+        func=mdp.target_object_dropped,
+        params={
+            "minimum_height": _DROP_Z,
+            "object_cfg": SceneEntityCfg("distractor_1"),
+        },
+    )
+
+    distractor_2_dropped = DoneTerm(
+        func=mdp.target_object_dropped,
+        params={
+            "minimum_height": _DROP_Z,
+            "object_cfg": SceneEntityCfg("distractor_2"),
+        },
+    )
+
+    distractor_3_dropped = DoneTerm(
+        func=mdp.target_object_dropped,
+        params={
+            "minimum_height": _DROP_Z,
+            "object_cfg": SceneEntityCfg("distractor_3"),
         },
     )
 
