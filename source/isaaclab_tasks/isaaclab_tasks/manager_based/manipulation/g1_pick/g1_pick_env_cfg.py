@@ -118,12 +118,12 @@ def wuji_monolithic_reward(
     is_grasped = (1.0 - torch.tanh(thumb_dist / _T)) * (1.0 - torch.tanh(finger_dist / _T)) 
 
 
-    lift_height   = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.30)
+    lift_height   = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
     # Only reward upward movement if palm is already near the cube
     palm_near = (1.0 - torch.tanh(palm_dist / 0.15))  # soft gate, fires at ~15cm
     lift_attempt_rew = lift_height * 20.0 * palm_near
 
-    lift_cont_rew = lift_height * 50.0 * is_grasped
+    lift_cont_rew = lift_height * 10.0 * is_grasped
     is_lifted     = cube_pos[:, 2] > _SUCCESS_Z
     success_bonus = is_lifted.float() * 100.0 * is_grasped
 
@@ -403,7 +403,7 @@ class RewardsCfg:
 
     distractor_penalty = RewTerm(
         func=distractor_velocity_penalty,
-        weight=-5.0,
+        weight=-10.0,
         params={
             "distractor_1_cfg": SceneEntityCfg("distractor_1"),
             "distractor_2_cfg": SceneEntityCfg("distractor_2"),
@@ -413,7 +413,7 @@ class RewardsCfg:
 
     distractor_drop = RewTerm(
         func=distractor_drop_penalty,
-        weight=-50.0,
+        weight=-100.0,
         params={
             "minimum_height": _DROP_Z,
             "distractor_1_cfg": SceneEntityCfg("distractor_1"),
