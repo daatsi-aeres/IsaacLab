@@ -1,8 +1,8 @@
 """
 Pad a 66-dim obs checkpoint to work with a 75-dim obs model.
 
-The 9 new dims (3 distractor positions) are inserted at indices 22-30
-(after object_vel at index 21, before right_fingertip_pos).
+The 9 new dims (3 distractor positions) are inserted at indices 35-43
+(after object_vel, before right_fingertip_pos).
 
 Old layout (66 dims):
   [0:13]  joint_pos
@@ -26,64 +26,76 @@ New layout (75 dims):
 
 import torch
 import sys
-import os
 
 OLD_DIM = 66
 NEW_DIM = 75
 INSERT_AT = 35  # after object_vel (indices 29-34), before fingertip_pos
 NUM_NEW = 9
 
+# Keys whose dim=1 needs padding from 66->75
+MODEL_KEYS_TO_PAD = {
+    "actor.0.weight", "critic.0.weight",
+    "actor_obs_normalizer._mean", "actor_obs_normalizer._var", "actor_obs_normalizer._std",
+    "critic_obs_normalizer._mean", "critic_obs_normalizer._var", "critic_obs_normalizer._std",
+}
+
+
+def pad_tensor_dim1(tensor, insert_at, num_new, fill_val=0.0):
+    """Insert num_new columns of fill_val at position insert_at along dim=1."""
+    left = tensor[:, :insert_at]
+    right = tensor[:, insert_at:]
+    pad = torch.full((tensor.shape[0], num_new), fill_val, dtype=tensor.dtype)
+    return torch.cat([left, pad, right], dim=1)
+
 
 def pad_checkpoint(input_path, output_path):
     checkpoint = torch.load(input_path, map_location="cpu", weights_only=False)
-    state_dict = checkpoint["model_state_dict"]
 
+    # --- 1. Pad model_state_dict ---
+    state_dict = checkpoint["model_state_dict"]
     padded = {}
     for key, tensor in state_dict.items():
-        if key in ("actor.0.weight", "critic.0.weight"):
-            # Shape: [out_features, 66] -> [out_features, 75]
-            assert tensor.shape[1] == OLD_DIM, f"{key} has shape {tensor.shape}, expected [:,{OLD_DIM}]"
-            left = tensor[:, :INSERT_AT]
-            right = tensor[:, INSERT_AT:]
-            zeros = torch.zeros(tensor.shape[0], NUM_NEW, dtype=tensor.dtype)
-            padded[key] = torch.cat([left, zeros, right], dim=1)
-            print(f"  {key}: {tensor.shape} -> {padded[key].shape}")
-
-        elif key in (
-            "actor_obs_normalizer._mean", "critic_obs_normalizer._mean",
-            "actor_obs_normalizer._var", "critic_obs_normalizer._var",
-        ):
-            # Shape: [1, 66] -> [1, 75]
-            assert tensor.shape[1] == OLD_DIM, f"{key} has shape {tensor.shape}"
-            left = tensor[:, :INSERT_AT]
-            right = tensor[:, INSERT_AT:]
-            fill_val = 0.0 if "_mean" in key else 1.0  # var=1 so std=1 (neutral)
-            pad = torch.full((1, NUM_NEW), fill_val, dtype=tensor.dtype)
-            padded[key] = torch.cat([left, pad, right], dim=1)
-            print(f"  {key}: {tensor.shape} -> {padded[key].shape}")
-
-        elif key in (
-            "actor_obs_normalizer._std",
-            "critic_obs_normalizer._std",
-        ):
-            assert tensor.shape[1] == OLD_DIM, f"{key} has shape {tensor.shape}"
-            left = tensor[:, :INSERT_AT]
-            right = tensor[:, INSERT_AT:]
-            pad = torch.ones((1, NUM_NEW), dtype=tensor.dtype)  # std=1 (neutral)
-            padded[key] = torch.cat([left, pad, right], dim=1)
-            print(f"  {key}: {tensor.shape} -> {padded[key].shape}")
-
-        elif key in (
-            "actor_obs_normalizer._count",
-            "critic_obs_normalizer._count",
-        ):
-            # Scalar, no change
-            padded[key] = tensor
+        if key in MODEL_KEYS_TO_PAD and tensor.dim() == 2 and tensor.shape[1] == OLD_DIM:
+            if "_var" in key or "_std" in key:
+                fill = 1.0  # neutral: var=1, std=1
+            else:
+                fill = 0.0  # neutral: weight=0, mean=0
+            padded[key] = pad_tensor_dim1(tensor, INSERT_AT, NUM_NEW, fill)
+            print(f"  model | {key}: {tensor.shape} -> {padded[key].shape}")
         else:
-            # All other layers (hidden layers, biases, etc.) unchanged
             padded[key] = tensor
-
     checkpoint["model_state_dict"] = padded
+
+    # --- 2. Pad optimizer_state_dict (Adam exp_avg and exp_avg_sq) ---
+    if "optimizer_state_dict" in checkpoint:
+        opt = checkpoint["optimizer_state_dict"]
+        for param_idx, param_state in opt["state"].items():
+            for buf_name in ("exp_avg", "exp_avg_sq"):
+                if buf_name in param_state:
+                    t = param_state[buf_name]
+                    if t.dim() == 2 and t.shape[1] == OLD_DIM:
+                        fill = 0.0  # zero momentum for new dims = fresh start
+                        param_state[buf_name] = pad_tensor_dim1(t, INSERT_AT, NUM_NEW, fill)
+                        print(f"  optim | param {param_idx} {buf_name}: {t.shape} -> {param_state[buf_name].shape}")
+                    elif t.dim() == 1 and t.shape[0] == OLD_DIM:
+                        # 1D case (bias-shaped but matching old dim — unlikely but safe)
+                        left = t[:INSERT_AT]
+                        right = t[INSERT_AT:]
+                        pad = torch.zeros(NUM_NEW, dtype=t.dtype)
+                        param_state[buf_name] = torch.cat([left, pad, right])
+                        print(f"  optim | param {param_idx} {buf_name}: {t.shape} -> {param_state[buf_name].shape}")
+
+        # Also pad param_groups params if they store shapes (usually just indices, but check)
+        checkpoint["optimizer_state_dict"] = opt
+        print("  optimizer state padded")
+    else:
+        print("  no optimizer_state_dict found (fine for inference, will init fresh for training)")
+
+    # --- 3. Drop the optimizer state entirely as a safer alternative ---
+    # Uncomment below if optimizer padding still causes issues:
+    # checkpoint.pop("optimizer_state_dict", None)
+    # print("  dropped optimizer state — Adam will reinitialize from scratch")
+
     torch.save(checkpoint, output_path)
     print(f"\nSaved padded checkpoint to: {output_path}")
 
