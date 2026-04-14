@@ -1,0 +1,169 @@
+================================================================================
+G1 + INSPIRE HAND USD STRUCTURE REFERENCE
+File: g1_with_hands_final.usd (USDA: human_readable_g1_hands.usda)
+Generated: 2026-04-13
+================================================================================
+
+1. TOP-LEVEL HIERARCHY
+================================================================================
+
+/Xform                                          <- ArticulationRootAPI lives here
+  /g1_29dof_with_hand_rev_1_0                   <- G1 robot root
+    /pelvis                                      <- Root body (fixed to world)
+    /[body joints: hips, knees, ankles, waist, shoulders, elbows, wrists]
+    /left_wrist_yaw_link                         <- LEFT hand attaches here
+    /right_wrist_yaw_link                        <- RIGHT hand attaches here
+    /g1_left_hand_inspire_left_physics           <- LEFT hand sub-tree
+      /left_hand                                 <- IsaacRobotAPI
+        /joints/[L_* joints]
+        /L_hand_base_link
+        /L_[finger]_proximal, L_[finger]_intermediate, etc.
+    /g1_right_hand_inspire_right_physics         <- RIGHT hand sub-tree
+      /right_hand                                <- IsaacRobotAPI
+        /joints/[R_* joints]
+        /R_hand_base_link
+        /R_[finger]_proximal, R_[finger]_intermediate, etc.
+
+/RootFixedJoint                                  <- Fixes pelvis to world
+  body1: /Xform/g1_29dof_with_hand_rev_1_0/pelvis
+  localPos1: (0, 0, -0.8671216)
+
+
+2. HAND-TO-WRIST ATTACHMENT (Fixed Joints)
+================================================================================
+
+LEFT HAND:
+  Joint: AssemblerFixedJoint
+  body0: .../left_wrist_yaw_link
+  body1: .../g1_left_hand_inspire_left_physics/left_hand/L_hand_base_link
+  localPos0: (0.041500002, 0.003000006, 2.505e-8)   <- offset from wrist
+  localPos1: (0, 0, 0)                                <- at hand origin
+  localRot0: (1, 0, 0, 0)                             <- identity (no rotation)
+  localRot1: (1, 0, 0, 0)
+
+RIGHT HAND:
+  Joint: AssemblerFixedJoint
+  body0: .../right_wrist_yaw_link
+  body1: .../g1_right_hand_inspire_right_physics/right_hand/R_hand_base_link
+  localPos0: (0.041500002, -0.003000006, 2.505e-8)   <- note Y is mirrored
+  localPos1: (0, 0, 0)
+  localRot0: (1, 0, 0, 0)
+  localRot1: (1, 0, 0, 0)
+
+
+3. RIGHT HAND JOINTS (12 total: 6 actuated + 6 mimic)
+================================================================================
+
+ACTUATED JOINTS (have PhysicsDriveAPI:angular):
+---------------------------------------------------------------------------------------------------------------------------
+Joint Name                      | Axis | Lower(deg) | Upper(deg) | Stiffness | Damping    | MaxForce | MaxVel
+---------------------------------------------------------------------------------------------------------------------------
+R_thumb_proximal_yaw_joint      | Z    |     -5.73  |     74.48  | 0.18791   | 0.0000752  | 1        | 28.65
+R_thumb_proximal_pitch_joint    | Z    |      0.00  |     28.65  | 0.05087   | 0.0000203  | 1        | 28.65
+R_index_proximal_joint          | Z    |      0.00  |     97.40  | 0.23310   | 0.0000932  | 1        | 28.65
+R_middle_proximal_joint         | Z    |      0.00  |     97.40  | 0.24574   | 0.0000983  | 1        | 28.65
+R_ring_proximal_joint           | Z    |      0.00  |     97.40  | 0.22834   | 0.0000913  | 1        | 28.65
+R_pinky_proximal_joint          | Z    |      0.00  |     97.40  | 0.19674   | 0.0000787  | 1        | 28.65
+
+MIMIC JOINTS (have PhysxMimicJointAPI:rotZ, NO drive):
+---------------------------------------------------------------------------------------------------------------------------
+Joint Name                      | Axis | Lower(deg) | Upper(deg) | Mimics                         | Gearing | Offset
+---------------------------------------------------------------------------------------------------------------------------
+R_thumb_intermediate_joint      | Z    |     -9.17  |     55.00  | R_thumb_proximal_pitch_joint   | -1.6    | 0
+R_thumb_distal_joint            | Z    |    -13.75  |     82.51  | R_thumb_proximal_pitch_joint   | -2.4    | 0
+R_index_intermediate_joint      | Z    |    -19.48  |    116.88  | R_index_proximal_joint         | -1.0    | 0
+R_middle_intermediate_joint     | Z    |    -19.48  |    116.88  | R_middle_proximal_joint        | -1.0    | 0
+R_ring_intermediate_joint       | Z    |    -19.48  |    116.88  | R_ring_proximal_joint          | -1.0    | 0
+R_pinky_intermediate_joint      | Z    |    -19.48  |    116.88  | R_pinky_proximal_joint         | -1.0    | 0
+
+Mimic joint parameters:
+  dampingRatio = 0.005
+  naturalFrequency = 25
+  referenceJoint = full prim path to the parent actuated joint
+
+
+4. RIGHT HAND KINEMATIC CHAIN
+================================================================================
+
+R_hand_base_link (palm)
+├── R_thumb_proximal_yaw_joint ──> R_thumb_proximal_base
+│   └── R_thumb_proximal_pitch_joint ──> R_thumb_proximal
+│       └── R_thumb_intermediate_joint (mimic, gear=-1.6) ──> R_thumb_intermediate
+│           └── R_thumb_distal_joint (mimic, gear=-2.4) ──> R_thumb_distal
+│               └── R_thumb_tip
+├── R_index_proximal_joint ──> R_index_proximal
+│   └── R_index_intermediate_joint (mimic, gear=-1.0) ──> R_index_intermediate
+│       └── R_index_tip
+├── R_middle_proximal_joint ──> R_middle_proximal
+│   └── R_middle_intermediate_joint (mimic, gear=-1.0) ──> R_middle_intermediate
+│       └── R_middle_tip
+├── R_ring_proximal_joint ──> R_ring_proximal
+│   └── R_ring_intermediate_joint (mimic, gear=-1.0) ──> R_ring_intermediate
+│       └── R_ring_tip
+└── R_pinky_proximal_joint ──> R_pinky_proximal
+    └── R_pinky_intermediate_joint (mimic, gear=-1.0) ──> R_pinky_intermediate
+        └── R_pinky_tip
+
+
+5. BODY/LINK STRUCTURE (per finger link)
+================================================================================
+
+Each finger link (e.g., R_index_proximal) has:
+  - apiSchemas: IsaacLinkAPI, PhysicsRigidBodyAPI, PhysicsMassAPI
+  - physics:centerOfMass, physics:diagonalInertia, physics:mass
+  - xformOp:translate, xformOp:orient, xformOp:scale
+  - Child: visuals/ (references flattened mesh prototypes)
+  - Child: collisions/ (references flattened collision prototypes)
+
+Collision on R_hand_base_link:
+  - Has PhysicsCollisionAPI, PhysicsMeshCollisionAPI, PhysxConvexDecompositionCollisionAPI
+  - This is the palm collision body
+
+Collision on L_hand_base_link:
+  - Same setup as right
+
+
+6. G1 BODY JOINTS (29 total)
+================================================================================
+
+Lower Body (12):
+  left/right_hip_pitch_joint, left/right_hip_roll_joint, left/right_hip_yaw_joint
+  left/right_knee_joint, left/right_ankle_pitch_joint, left/right_ankle_roll_joint
+
+Waist (3):
+  waist_yaw_joint, waist_roll_joint, waist_pitch_joint
+
+Arms (14):
+  left/right_shoulder_pitch_joint, left/right_shoulder_roll_joint
+  left/right_shoulder_yaw_joint, left/right_elbow_joint
+  left/right_wrist_roll_joint, left/right_wrist_pitch_joint, left/right_wrist_yaw_joint
+
+Total articulation: 29 (body) + 12 (right hand) + 12 (left hand) = 53 revolute joints
+
+
+7. KEY OBSERVATIONS FOR HAND REPLACEMENT
+================================================================================
+
+a) The hands are separate sub-trees attached via PhysicsFixedJoint (AssemblerFixedJoint).
+   The attachment point is: wrist_yaw_link -> hand_base_link with a specific offset.
+
+b) The USD uses Isaac Sim's "Assembler" pattern:
+   - g1_left_hand_inspire_left_physics/left_hand  (left hand sub-articulation)
+   - g1_right_hand_inspire_right_physics/right_hand (right hand sub-articulation)
+
+c) Mimic joints use PhysxMimicJointAPI:rotZ (NOT software mimic in the env cfg).
+   However, the env cfg ALSO implements software mimic via InspireMimicAction.
+   The USD mimic gearings are: thumb_inter=-1.6, thumb_distal=-2.4, fingers=-1.0
+   The software mimic gearings are: thumb_inter=0.8024, thumb_distal=0.8024*0.9487, fingers=1.0843
+   NOTE: These are DIFFERENT ratios — the software mimic overrides the USD mimic.
+
+d) USD joint drive stiffness/damping are VERY LOW (e.g., stiffness ~0.2, damping ~0.00008).
+   The env cfg overrides these with the ImplicitActuatorCfg:
+   - right_hand: stiffness=100.0, damping=0.5, effort_limit=30.0
+   Isaac Lab's implicit actuator settings OVERRIDE the USD joint drive values.
+
+e) Attachment offset for right hand: localPos0 = (0.0415, -0.003, ~0)
+   Attachment offset for left hand:  localPos0 = (0.0415, +0.003, ~0)
+   Only the Y component is mirrored between left and right.
+
+f) The pelvis is fixed to the world via RootFixedJoint at z=-0.8671216.
