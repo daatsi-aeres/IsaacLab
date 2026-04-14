@@ -40,6 +40,22 @@ _RIGHT_HAND_BODIES = [
     "R_pinky_intermediate",  # Index 5: Pinky tip (physically tracked)
 ]
 
+def distractor_velocity_penalty(
+    env: ManagerBasedRLEnv,
+    distractor_1_cfg: SceneEntityCfg,
+    distractor_2_cfg: SceneEntityCfg,
+    distractor_3_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Penalize disturbing non-target objects. Averaged across distractors so
+    adding more distractors later doesn't scale up the penalty magnitude."""
+    total = torch.zeros(env.num_envs, device=env.device)
+    for cfg in [distractor_1_cfg, distractor_2_cfg, distractor_3_cfg]:
+        obj: RigidObject = env.scene[cfg.name]
+        speed = torch.norm(obj.data.root_lin_vel_w, dim=-1)
+        total += torch.tanh(speed / 0.15)
+    return total / 3.0
+
+
 def wuji_monolithic_reward(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
@@ -166,6 +182,57 @@ class SceneCfg(InteractiveSceneCfg):
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.35, 0.00, _OBJ_INIT_Z]),
     )
 
+    distractor_1: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor1",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),  # Blue
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                solver_position_iteration_count=16,
+                solver_velocity_iteration_count=1,
+                disable_gravity=False,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.50, 0.18, _OBJ_INIT_Z]),
+    )
+
+    distractor_2: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor2",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),  # Green
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                solver_position_iteration_count=16,
+                solver_velocity_iteration_count=1,
+                disable_gravity=False,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.50, -0.18, _OBJ_INIT_Z]),
+    )
+
+    distractor_3: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor3",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0)),  # Yellow
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                solver_position_iteration_count=16,
+                solver_velocity_iteration_count=1,
+                disable_gravity=False,
+            ),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.25, 0.15, _OBJ_INIT_Z]),
+    )
+
     plane = AssetBaseCfg(
         prim_path="/World/GroundPlane",
         init_state=AssetBaseCfg.InitialStateCfg(pos=[0, 0, 0]),
@@ -277,6 +344,19 @@ class ObservationsCfg:
             params={"object_cfg": SceneEntityCfg("target_object")},
             clip=(-50.0, 50.0),
         )
+        # Distractor positions — privileged state so teacher learns avoidance
+        distractor_1_pos_b = ObsTerm(
+            func=mdp.target_object_position_b,
+            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_1")},
+        )
+        distractor_2_pos_b = ObsTerm(
+            func=mdp.target_object_position_b,
+            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_2")},
+        )
+        distractor_3_pos_b = ObsTerm(
+            func=mdp.target_object_position_b,
+            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_3")},
+        )
         # Dense Spatial Observation: Explicitly feeds the distance between fingertips and the block into the neural network
         right_fingertip_pos = ObsTerm(
             func=mdp.fingertip_positions_b,
@@ -303,6 +383,16 @@ class RewardsCfg:
             "action_rate_scale": 0.0005, # Heavily penalizes twitching/spasming
             "joint_vel_scale": 0.0001,  # Creates a "speed limit" to stop Mach 3 movements
             "action_l2_scale": 0.0,   # Encourages the network to rest when not moving
+        },
+    )
+
+    distractor_penalty = RewTerm(
+        func=distractor_velocity_penalty,
+        weight=-0.3,
+        params={
+            "distractor_1_cfg": SceneEntityCfg("distractor_1"),
+            "distractor_2_cfg": SceneEntityCfg("distractor_2"),
+            "distractor_3_cfg": SceneEntityCfg("distractor_3"),
         },
     )
 
@@ -377,6 +467,37 @@ class EventCfg:
             "pose_range": {"x": (-0.10, 0.10), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("target_object"),
+        },
+    )
+
+    # Distractor reset with small jitter so they stay in their quadrants
+    reset_distractor_1 = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("distractor_1"),
+        },
+    )
+
+    reset_distractor_2 = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("distractor_2"),
+        },
+    )
+
+    reset_distractor_3 = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("distractor_3"),
         },
     )
 
