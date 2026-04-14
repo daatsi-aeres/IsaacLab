@@ -196,7 +196,7 @@ class SceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.50, 0.18, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.50, 0.10, _OBJ_INIT_Z]),
     )
 
     distractor_2: RigidObjectCfg = RigidObjectCfg(
@@ -213,7 +213,7 @@ class SceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.50, -0.18, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.50, -0.10, _OBJ_INIT_Z]),
     )
 
     distractor_3: RigidObjectCfg = RigidObjectCfg(
@@ -230,7 +230,7 @@ class SceneCfg(InteractiveSceneCfg):
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.25, 0.15, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.42, 0.0, _OBJ_INIT_Z]),
     )
 
     plane = AssetBaseCfg(
@@ -475,7 +475,7 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            "pose_range": {"x": (-0.08, 0.08), "y": (-0.08, 0.08), "z": (0.0, 0.0)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("distractor_1"),
         },
@@ -485,7 +485,7 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            "pose_range": {"x": (-0.08, 0.08), "y": (-0.08, 0.08), "z": (0.0, 0.0)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("distractor_2"),
         },
@@ -495,7 +495,7 @@ class EventCfg:
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (0.0, 0.0)},
+            "pose_range": {"x": (-0.08, 0.08), "y": (-0.08, 0.08), "z": (0.0, 0.0)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("distractor_3"),
         },
