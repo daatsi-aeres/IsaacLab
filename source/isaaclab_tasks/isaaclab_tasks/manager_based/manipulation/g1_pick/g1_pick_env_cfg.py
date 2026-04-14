@@ -27,7 +27,7 @@ from . import mdp
 
 # --- PERFECTED HEIGHT CALCULATIONS (0.05m Cube) ---
 _OBJ_INIT_Z   = 0.845   # Cube center (Bottom sits perfectly flush at 0.820m tray surface)
-_SUCCESS_Z    = 0.945   # Exactly 10cm lift from the new starting height
+_SUCCESS_Z    = 1.134   # 1.2x the original 0.945 — ~29cm lift from tray
 _DROP_Z       = 0.600   # Triggers early termination if the policy knocks it off the table
 
 # Provides the exact physical links the policy needs to track for dense distance rewards
@@ -118,14 +118,14 @@ def wuji_monolithic_reward(
     is_grasped = (1.0 - torch.tanh(thumb_dist / _T)) * (1.0 - torch.tanh(finger_dist / _T)) 
 
 
-    lift_height   = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.15)
+    lift_height   = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.30)
     # Only reward upward movement if palm is already near the cube
     palm_near = (1.0 - torch.tanh(palm_dist / 0.15))  # soft gate, fires at ~15cm
     lift_attempt_rew = lift_height * 20.0 * palm_near
 
     lift_cont_rew = lift_height * 50.0 * is_grasped
     is_lifted     = cube_pos[:, 2] > _SUCCESS_Z
-    success_bonus = is_lifted.float() * 25.0 * is_grasped
+    success_bonus = is_lifted.float() * 100.0 * is_grasped
 
     # 6. PENALTIES & AGGREGATION
     actions = env.action_manager.action
@@ -557,7 +557,7 @@ class TerminationsCfg:
     target_lifted = DoneTerm(
         func=mdp.target_object_lifted,
         params={
-            "success_height": _SUCCESS_Z * 1.2,
+            "success_height": _SUCCESS_Z,
             "object_cfg": SceneEntityCfg("target_object"),
         },
     )
