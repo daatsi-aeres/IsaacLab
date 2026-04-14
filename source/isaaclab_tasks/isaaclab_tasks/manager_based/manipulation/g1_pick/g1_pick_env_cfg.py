@@ -122,7 +122,7 @@ def wuji_monolithic_reward(
 
     lift_cont_rew = lift_height * 2.0 * is_grasped
     is_lifted     = cube_pos[:, 2] > _SUCCESS_Z
-    success_bonus = is_lifted.float() * 500.0 * is_grasped
+    success_bonus = is_lifted.float() * is_grasped
 
     # 6. PENALTIES & AGGREGATION
     actions = env.action_manager.action
@@ -139,7 +139,7 @@ def wuji_monolithic_reward(
         reach_rew * 1.0 +
         grasp_rew * 2.0 +
         lift_cont_rew +
-        success_bonus -
+        success_bonus * 500.0 -
         (action_rate_penalty * action_rate_scale) -
         (joint_vel_penalty * joint_vel_scale) -
         (action_l2_penalty * action_l2_scale)
