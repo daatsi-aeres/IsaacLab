@@ -139,7 +139,7 @@ def wuji_monolithic_reward(
         reach_rew * 1.0 +
         grasp_rew * 2.0 +
         lift_cont_rew +
-        success_bonus * 500.0 -
+        success_bonus * 1000.0 -
         (action_rate_penalty * action_rate_scale) -
         (joint_vel_penalty * joint_vel_scale) -
         (action_l2_penalty * action_l2_scale)
@@ -391,15 +391,15 @@ class RewardsCfg:
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_rate_scale": 0.0005, # Heavily penalizes twitching/spasming
-            "joint_vel_scale": 0.0001,  # Creates a "speed limit" to stop Mach 3 movements
+            "action_rate_scale": 0.005, # Heavily penalizes twitching/spasming
+            "joint_vel_scale": 0.001,  # Creates a "speed limit" to stop Mach 3 movements
             "action_l2_scale": 0.0,   # Encourages the network to rest when not moving
         },
     )
 
     distractor_penalty = RewTerm(
         func=distractor_velocity_penalty,
-        weight=-10.0,
+        weight=-50.0,
         params={
             "distractor_1_cfg": SceneEntityCfg("distractor_1"),
             "distractor_2_cfg": SceneEntityCfg("distractor_2"),
@@ -409,7 +409,7 @@ class RewardsCfg:
 
     distractor_drop = RewTerm(
         func=distractor_drop_penalty,
-        weight=-100.0,
+        weight=-500.0,
         params={
             "minimum_height": _DROP_Z,
             "distractor_1_cfg": SceneEntityCfg("distractor_1"),
