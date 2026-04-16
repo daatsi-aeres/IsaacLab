@@ -28,6 +28,7 @@ from . import mdp
 # --- PERFECTED HEIGHT CALCULATIONS (0.05m Cube) ---
 _OBJ_INIT_Z   = 0.845   # Cube center (Bottom sits perfectly flush at 0.820m tray surface)
 _SUCCESS_Z    = 1.134   # 1.2x the original 0.945 — ~29cm lift from tray
+_OFF_TRAY_Z   = 0.835   # Cube center below this = fell off tray (rests on table at ~0.825m)
 _DROP_Z       = 0.600   # Triggers early termination if the policy knocks it off the table
 
 # Provides the exact physical links the policy needs to track for dense distance rewards
@@ -40,114 +41,133 @@ _RIGHT_HAND_BODIES = [
     "R_pinky_intermediate",  # Index 5: Pinky tip (physically tracked)
 ]
 
-def distractor_velocity_penalty(
+# 10 distractor entity names — used across reward/termination/obs/event configs
+_DISTRACTOR_NAMES = [f"distractor_{i}" for i in range(1, 11)]
+
+
+def compute_task_reward(
     env: ManagerBasedRLEnv,
-    distractor_1_cfg: SceneEntityCfg,
-    distractor_2_cfg: SceneEntityCfg,
-    distractor_3_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg,
 ) -> torch.Tensor:
-    """Penalize disturbing non-target objects. Averaged across distractors so
-    adding more distractors later doesn't scale up the penalty magnitude."""
+    """Dense pick+lift shaping: posture, reach, grasp, lift_cont, success_bonus.
+    Overridden to -0.5 when target is dropped."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+
+    cube_pos = obj.data.root_pos_w.clone()
+    palm_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[0]]
+    tips_pos = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
+
+    raw_thumb_dist  = torch.linalg.norm(tips_pos[:, 0:1] - cube_pos.unsqueeze(1), dim=-1).squeeze(1)
+    raw_finger_dist = torch.linalg.norm(tips_pos[:, 1:]  - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
+    thumb_dist  = torch.clamp(raw_thumb_dist  - 0.025, min=0.0)
+    finger_dist = torch.clamp(raw_finger_dist - 0.025, min=0.0)
+
+    palm_target = cube_pos.clone()
+    palm_target[:, 2] += 0.08
+    palm_dist = torch.linalg.norm(palm_pos - palm_target, dim=-1)
+    posture_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.03, min=0.0) / 0.3)
+
+    fingertip_midpoint = tips_pos.mean(dim=1)
+    midpoint_dist = torch.linalg.norm(fingertip_midpoint - cube_pos, dim=-1)
+    reach_rew = 1.0 - torch.tanh(midpoint_dist / 0.25)
+
+    thumb_grasp_rew  = 1.0 - torch.tanh(thumb_dist  / 0.055)
+    finger_grasp_rew = 1.0 - torch.tanh(finger_dist / 0.055)
+    grasp_rew = (thumb_grasp_rew + finger_grasp_rew) / 2.0
+
+    _T = 0.06
+    is_grasped = (1.0 - torch.tanh(thumb_dist / _T)) * (1.0 - torch.tanh(finger_dist / _T))
+
+    lift_height = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.30)
+    lift_cont_rew = lift_height * 2.0 * is_grasped
+    is_lifted = cube_pos[:, 2] > _SUCCESS_Z
+    success_bonus = is_lifted.float() * is_grasped * 1000.0
+
+    reward = posture_rew + reach_rew + grasp_rew * 2.0 + lift_cont_rew + success_bonus
+
+    is_dropped = cube_pos[:, 2] < _DROP_Z
+    reward = torch.where(is_dropped, torch.full_like(reward, -0.5), reward)
+    return reward
+
+
+def action_smoothness_penalty(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    action_rate_scale: float = 0.005,
+    joint_vel_scale: float = 0.001,
+    action_l2_scale: float = 0.0,
+) -> torch.Tensor:
+    """Aggregated action penalty (returned positive; apply weight=-1.0 in RewTerm)."""
+    robot: Articulation = env.scene[robot_cfg.name]
+    joint_vels = robot.data.joint_vel
+    actions = env.action_manager.action
+    prev_actions = env.action_manager.prev_action
+
+    action_rate = torch.sum(torch.square(actions - prev_actions), dim=-1)
+    joint_vel = torch.sum(torch.square(joint_vels), dim=-1)
+    action_l2 = torch.sum(torch.square(actions), dim=-1)
+
+    return (
+        action_rate * action_rate_scale
+        + joint_vel * joint_vel_scale
+        + action_l2 * action_l2_scale
+    )
+
+
+def distractor_acceleration_penalty(
+    env: ManagerBasedRLEnv,
+    distractor_names: list[str],
+    accel_threshold: float = 2.0,
+) -> torch.Tensor:
+    """Penalize impact/contact on distractors via per-step velocity change (accel proxy).
+    Gentle contact ~0.1, violent swipe saturates tanh near 1.0. Mean across distractors."""
+    # Lazy-init the prev-velocity buffer on first call
+    if not hasattr(env, "_distractor_prev_vel"):
+        env._distractor_prev_vel = {
+            name: torch.zeros((env.num_envs, 3), device=env.device)
+            for name in distractor_names
+        }
+
     total = torch.zeros(env.num_envs, device=env.device)
-    for cfg in [distractor_1_cfg, distractor_2_cfg, distractor_3_cfg]:
-        obj: RigidObject = env.scene[cfg.name]
-        speed = torch.norm(obj.data.root_lin_vel_w, dim=-1)
-        total += torch.tanh(speed / 0.15)
-    return total / 3.0
+    for name in distractor_names:
+        obj: RigidObject = env.scene[name]
+        cur_vel = obj.data.root_lin_vel_w
+        prev_vel = env._distractor_prev_vel[name]
+        delta_v_mag = torch.norm(cur_vel - prev_vel, dim=-1)
+        total += torch.tanh(delta_v_mag / accel_threshold)
+        env._distractor_prev_vel[name] = cur_vel.detach().clone()
+
+    return total / float(len(distractor_names))
+
+
+def distractor_off_tray_penalty(
+    env: ManagerBasedRLEnv,
+    off_tray_height: float,
+    distractor_names: list[str],
+) -> torch.Tensor:
+    """Per-step count of distractors below tray surface (still on table, not terminal).
+    Returns 0 to len(distractor_names). Applied per-step so penalty accumulates
+    while any distractor is off the tray — strong signal to avoid tipping cubes."""
+    count = torch.zeros(env.num_envs, device=env.device)
+    for name in distractor_names:
+        obj: RigidObject = env.scene[name]
+        count += (obj.data.root_pos_w[:, 2] < off_tray_height).float()
+    return count
 
 
 def distractor_drop_penalty(
     env: ManagerBasedRLEnv,
     minimum_height: float,
-    distractor_1_cfg: SceneEntityCfg,
-    distractor_2_cfg: SceneEntityCfg,
-    distractor_3_cfg: SceneEntityCfg,
+    distractor_names: list[str],
 ) -> torch.Tensor:
-    """Sparse penalty: returns 1.0 if ANY distractor fell below minimum_height."""
+    """Sparse: returns 1.0 if ANY distractor fell below minimum_height."""
     any_dropped = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-    for cfg in [distractor_1_cfg, distractor_2_cfg, distractor_3_cfg]:
-        obj: RigidObject = env.scene[cfg.name]
+    for name in distractor_names:
+        obj: RigidObject = env.scene[name]
         any_dropped |= obj.data.root_pos_w[:, 2] < minimum_height
     return any_dropped.float()
-
-
-def wuji_monolithic_reward(
-    env: ManagerBasedRLEnv,
-    robot_cfg: SceneEntityCfg,
-    object_cfg: SceneEntityCfg,
-    action_rate_scale: float = 0.005, 
-    joint_vel_scale: float = 0.0005,   
-    action_l2_scale: float = 0.001,    
-) -> torch.Tensor:
-    robot: Articulation = env.scene[robot_cfg.name]
-    obj: RigidObject = env.scene[object_cfg.name]
-
-    # 1. EXTRACT
-    cube_pos   = obj.data.root_pos_w.clone()
-    palm_pos   = robot.data.body_pos_w[:, robot_cfg.body_ids[0]]
-    tips_pos   = robot.data.body_pos_w[:, robot_cfg.body_ids[1:]]
-    joint_vels = robot.data.joint_vel
-
-    # Distances - scalars [N]
-    raw_thumb_dist  = torch.linalg.norm(tips_pos[:, 0:1] - cube_pos.unsqueeze(1), dim=-1).squeeze(1)
-    raw_finger_dist = torch.linalg.norm(tips_pos[:, 1:]  - cube_pos.unsqueeze(1), dim=-1).mean(dim=1)
-
-    # Shift the zero-point to the surface of the 5cm cube (radius = 0.025m)
-    thumb_dist = torch.clamp(raw_thumb_dist - 0.025, min=0.0)
-    finger_dist = torch.clamp(raw_finger_dist - 0.025, min=0.0)
-
-    # 2. POSTURE - palm 8cm above cube
-    palm_target = cube_pos.clone()
-    palm_target[:, 2] += 0.08
-    palm_dist   = torch.linalg.norm(palm_pos - palm_target, dim=-1)
-    posture_rew = 1.0 - torch.tanh(torch.clamp(palm_dist - 0.03, min=0.0) / 0.3)
-
-    # 3. REACH - 3D midpoint of fingertips toward cube center
-    # tips_pos is [N, 5, 3], mean over finger dim gives [N, 3] position
-    fingertip_midpoint = tips_pos.mean(dim=1)                              # [N, 3]
-    midpoint_dist = torch.linalg.norm(fingertip_midpoint - cube_pos, dim=-1)  # [N]
-    reach_rew = 1.0 - torch.tanh(midpoint_dist / 0.25)
-
-    # 4. GRASP - separate thumb vs finger shaping, mirrors is_grasped structure
-    thumb_grasp_rew  = 1.0 - torch.tanh(thumb_dist  / 0.055)
-    finger_grasp_rew = 1.0 - torch.tanh(finger_dist / 0.055)
-    grasp_rew        = (thumb_grasp_rew + finger_grasp_rew) / 2.0
-
-    # 5. SOFT GATE
-    _T        = 0.06
-    is_grasped = (1.0 - torch.tanh(thumb_dist / _T)) * (1.0 - torch.tanh(finger_dist / _T)) 
-
-
-    lift_height   = (cube_pos[:, 2] - _OBJ_INIT_Z).clamp(min=0.0, max=0.30)
-
-    lift_cont_rew = lift_height * 2.0 * is_grasped
-    is_lifted     = cube_pos[:, 2] > _SUCCESS_Z
-    success_bonus = is_lifted.float() * is_grasped
-
-    # 6. PENALTIES & AGGREGATION
-    actions = env.action_manager.action
-    prev_actions = env.action_manager.prev_action
-    
-    action_rate_penalty = torch.sum(torch.square(actions - prev_actions), dim=-1)
-    joint_vel_penalty = torch.sum(torch.square(joint_vels), dim=-1)
-    action_l2_penalty = torch.sum(torch.square(actions), dim=-1)
-
-    is_dropped = cube_pos[:, 2] < _DROP_Z
-
-    reward = (
-        posture_rew * 1.0 +
-        reach_rew * 1.0 +
-        grasp_rew * 2.0 +
-        lift_cont_rew +
-        success_bonus * 1000.0 -
-        (action_rate_penalty * action_rate_scale) -
-        (joint_vel_penalty * joint_vel_scale) -
-        (action_l2_penalty * action_l2_scale)
-    )
-
-    reward = torch.where(is_dropped, torch.ones_like(reward) * -0.5, reward)
-
-    return reward
 
 @configclass
 class SceneCfg(InteractiveSceneCfg):
@@ -193,21 +213,21 @@ class SceneCfg(InteractiveSceneCfg):
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.35, 0.00, _OBJ_INIT_Z]),
     )
 
+    # 10 distractors at fixed anchor positions around the target at [0.35, 0.0]
+    # Ring 1 (approach path): 1, 2, 3
+    # Ring 2 (mid workspace): 4, 5, 6, 7
+    # Ring 3 (edges):         8, 9, 10
     distractor_1: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Distractor1",
         spawn=sim_utils.CuboidCfg(
             size=(0.05, 0.05, 0.05),
             physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),  # Blue
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=1,
-                disable_gravity=False,
-            ),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.42, 0.08, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.38, 0.08, _OBJ_INIT_Z]),
     )
 
     distractor_2: RigidObjectCfg = RigidObjectCfg(
@@ -215,16 +235,12 @@ class SceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.CuboidCfg(
             size=(0.05, 0.05, 0.05),
             physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),  # Green
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=1,
-                disable_gravity=False,
-            ),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.42, -0.08, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.38, -0.08, _OBJ_INIT_Z]),
     )
 
     distractor_3: RigidObjectCfg = RigidObjectCfg(
@@ -232,16 +248,103 @@ class SceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.CuboidCfg(
             size=(0.05, 0.05, 0.05),
             physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0)),  # Yellow
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=1,
-                disable_gravity=False,
-            ),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
             mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
             collision_props=sim_utils.CollisionPropertiesCfg(),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.38, 0.0, _OBJ_INIT_Z]),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.42, 0.0, _OBJ_INIT_Z]),
+    )
+
+    distractor_4: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor4",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.5, 0.0)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.32, 0.12, _OBJ_INIT_Z]),
+    )
+
+    distractor_5: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor5",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.5, 0.0, 1.0)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.32, -0.12, _OBJ_INIT_Z]),
+    )
+
+    distractor_6: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor6",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 1.0)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.48, 0.12, _OBJ_INIT_Z]),
+    )
+
+    distractor_7: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor7",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 1.0)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.48, -0.12, _OBJ_INIT_Z]),
+    )
+
+    distractor_8: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor8",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.6, 0.3, 0.1)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.28, 0.0, _OBJ_INIT_Z]),
+    )
+
+    distractor_9: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor9",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.8, 0.4)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.52, 0.0, _OBJ_INIT_Z]),
+    )
+
+    distractor_10: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor10",
+        spawn=sim_utils.CuboidCfg(
+            size=(0.05, 0.05, 0.05),
+            physics_material=RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.8, 0.8, 0.8)),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(solver_position_iteration_count=16, solver_velocity_iteration_count=1, disable_gravity=False),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.2),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.35, 0.18, _OBJ_INIT_Z]),
     )
 
     plane = AssetBaseCfg(
@@ -355,19 +458,17 @@ class ObservationsCfg:
             params={"object_cfg": SceneEntityCfg("target_object")},
             clip=(-50.0, 50.0),
         )
-        # Distractor positions — privileged state so teacher learns avoidance
-        distractor_1_pos_b = ObsTerm(
-            func=mdp.target_object_position_b,
-            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_1")},
-        )
-        distractor_2_pos_b = ObsTerm(
-            func=mdp.target_object_position_b,
-            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_2")},
-        )
-        distractor_3_pos_b = ObsTerm(
-            func=mdp.target_object_position_b,
-            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_3")},
-        )
+        # Distractor positions — privileged state so teacher learns avoidance (10 distractors)
+        distractor_1_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_1")})
+        distractor_2_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_2")})
+        distractor_3_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_3")})
+        distractor_4_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_4")})
+        distractor_5_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_5")})
+        distractor_6_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_6")})
+        distractor_7_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_7")})
+        distractor_8_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_8")})
+        distractor_9_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_9")})
+        distractor_10_pos_b = ObsTerm(func=mdp.target_object_position_b, params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("distractor_10")})
         # Dense Spatial Observation: Explicitly feeds the distance between fingertips and the block into the neural network
         right_fingertip_pos = ObsTerm(
             func=mdp.fingertip_positions_b,
@@ -384,37 +485,55 @@ class ObservationsCfg:
 
 @configclass
 class RewardsCfg:
-    # Single monolithic function calculates all rewards, heavily optimizing GPU computation time
-    wuji_total = RewTerm(
-        func=wuji_monolithic_reward,
+    # Dense pick/lift shaping: posture + reach + grasp + lift + success_bonus (with target_drop override)
+    task_reward = RewTerm(
+        func=compute_task_reward,
         weight=1.0,
         params={
             "robot_cfg": SceneEntityCfg("robot", body_names=_RIGHT_HAND_BODIES),
             "object_cfg": SceneEntityCfg("target_object"),
-            "action_rate_scale": 0.005, # Heavily penalizes twitching/spasming
-            "joint_vel_scale": 0.001,  # Creates a "speed limit" to stop Mach 3 movements
-            "action_l2_scale": 0.0,   # Encourages the network to rest when not moving
         },
     )
 
-    distractor_penalty = RewTerm(
-        func=distractor_velocity_penalty,
-        weight=-50.0,
+    # Aggregated action penalties (function returns positive, weight applies negative sign)
+    action_smoothness = RewTerm(
+        func=action_smoothness_penalty,
+        weight=-1.0,
         params={
-            "distractor_1_cfg": SceneEntityCfg("distractor_1"),
-            "distractor_2_cfg": SceneEntityCfg("distractor_2"),
-            "distractor_3_cfg": SceneEntityCfg("distractor_3"),
+            "robot_cfg": SceneEntityCfg("robot"),
+            "action_rate_scale": 0.005,
+            "joint_vel_scale": 0.001,
+            "action_l2_scale": 0.0,
         },
     )
 
+    # Acceleration (|Δv| per step) across 10 distractors — gentle, impact-based
+    distractor_accel = RewTerm(
+        func=distractor_acceleration_penalty,
+        weight=-3.0,
+        params={
+            "distractor_names": _DISTRACTOR_NAMES,
+            "accel_threshold": 2.0,
+        },
+    )
+
+    # Heavy per-step penalty per distractor currently below tray surface (episode continues)
+    distractor_off_tray = RewTerm(
+        func=distractor_off_tray_penalty,
+        weight=-10.0,
+        params={
+            "off_tray_height": _OFF_TRAY_Z,
+            "distractor_names": _DISTRACTOR_NAMES,
+        },
+    )
+
+    # Sparse: fires once if ANY distractor falls below _DROP_Z (episode terminates)
     distractor_drop = RewTerm(
         func=distractor_drop_penalty,
-        weight=-500.0,
+        weight=-100.0,
         params={
             "minimum_height": _DROP_Z,
-            "distractor_1_cfg": SceneEntityCfg("distractor_1"),
-            "distractor_2_cfg": SceneEntityCfg("distractor_2"),
-            "distractor_3_cfg": SceneEntityCfg("distractor_3"),
+            "distractor_names": _DISTRACTOR_NAMES,
         },
     )
 
@@ -492,36 +611,17 @@ class EventCfg:
         },
     )
 
-    # Distractor reset with small jitter so they stay in their quadrants
-    reset_distractor_1 = EventTerm(
-        func=mdp.reset_root_state_uniform,
-        mode="reset",
-        params={
-            "pose_range": {"x": (-0.08, 0.08), "y": (-0.08, 0.08), "z": (0.0, 0.0)},
-            "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("distractor_1"),
-        },
-    )
-
-    reset_distractor_2 = EventTerm(
-        func=mdp.reset_root_state_uniform,
-        mode="reset",
-        params={
-            "pose_range": {"x": (-0.08, 0.08), "y": (-0.08, 0.08), "z": (0.0, 0.0)},
-            "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("distractor_2"),
-        },
-    )
-
-    reset_distractor_3 = EventTerm(
-        func=mdp.reset_root_state_uniform,
-        mode="reset",
-        params={
-            "pose_range": {"x": (-0.08, 0.08), "y": (-0.08, 0.08), "z": (0.0, 0.0)},
-            "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("distractor_3"),
-        },
-    )
+    # Distractor resets with ±3cm jitter — keeps cubes non-overlapping given 7cm+ anchor spacing
+    reset_distractor_1 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_1")})
+    reset_distractor_2 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_2")})
+    reset_distractor_3 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_3")})
+    reset_distractor_4 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_4")})
+    reset_distractor_5 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_5")})
+    reset_distractor_6 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_6")})
+    reset_distractor_7 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_7")})
+    reset_distractor_8 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_8")})
+    reset_distractor_9 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_9")})
+    reset_distractor_10 = EventTerm(func=mdp.reset_root_state_uniform, mode="reset", params={"pose_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (0.0, 0.0)}, "velocity_range": {}, "asset_cfg": SceneEntityCfg("distractor_10")})
 
     # apply_high_friction_to_fingers = EventTerm(
     #     func=mdp.randomize_rigid_body_material,
@@ -567,27 +667,12 @@ class TerminationsCfg:
         },
     )
 
-    distractor_1_dropped = DoneTerm(
-        func=mdp.target_object_dropped,
+    # Single aggregated termination — fires if ANY distractor falls off the tray
+    distractor_dropped = DoneTerm(
+        func=mdp.any_distractor_dropped,
         params={
             "minimum_height": _DROP_Z,
-            "object_cfg": SceneEntityCfg("distractor_1"),
-        },
-    )
-
-    distractor_2_dropped = DoneTerm(
-        func=mdp.target_object_dropped,
-        params={
-            "minimum_height": _DROP_Z,
-            "object_cfg": SceneEntityCfg("distractor_2"),
-        },
-    )
-
-    distractor_3_dropped = DoneTerm(
-        func=mdp.target_object_dropped,
-        params={
-            "minimum_height": _DROP_Z,
-            "object_cfg": SceneEntityCfg("distractor_3"),
+            "distractor_names": _DISTRACTOR_NAMES,
         },
     )
 

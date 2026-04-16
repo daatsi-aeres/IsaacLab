@@ -1,7 +1,7 @@
 """
-Pad a 66-dim obs checkpoint to work with a 75-dim obs model.
+Pad a 66-dim obs checkpoint to work with a 96-dim obs model (10 distractors).
 
-The 9 new dims (3 distractor positions) are inserted at indices 35-43
+The 30 new dims (10 distractor positions × 3) are inserted at indices 35-65
 (after object_vel, before right_fingertip_pos).
 
 Old layout (66 dims):
@@ -9,30 +9,28 @@ Old layout (66 dims):
   [13:26] joint_vel
   [26:29] object_pos_b
   [29:35] object_vel
-  [35:53] right_fingertip_pos   <-- these shift by +9
-  [53:66] actions               <-- these shift by +9
+  [35:53] right_fingertip_pos   <-- these shift by +30
+  [53:66] actions               <-- these shift by +30
 
-New layout (75 dims):
+New layout (96 dims):
   [0:13]  joint_pos
   [13:26] joint_vel
   [26:29] object_pos_b
   [29:35] object_vel
-  [35:38] distractor_1_pos_b    <-- NEW
-  [38:41] distractor_2_pos_b    <-- NEW
-  [41:44] distractor_3_pos_b    <-- NEW
-  [44:62] right_fingertip_pos
-  [62:75] actions
+  [35:65] 10 × distractor_pos_b (3 dims each)    <-- NEW
+  [65:83] right_fingertip_pos
+  [83:96] actions
 """
 
 import torch
 import sys
 
 OLD_DIM = 66
-NEW_DIM = 75
+NEW_DIM = 96
 INSERT_AT = 35  # after object_vel (indices 29-34), before fingertip_pos
-NUM_NEW = 9
+NUM_NEW = 30
 
-# Keys whose dim=1 needs padding from 66->75
+# Keys whose dim=1 needs padding from 66->96
 MODEL_KEYS_TO_PAD = {
     "actor.0.weight", "critic.0.weight",
     "actor_obs_normalizer._mean", "actor_obs_normalizer._var", "actor_obs_normalizer._std",
@@ -102,7 +100,7 @@ def pad_checkpoint(input_path, output_path):
 
 if __name__ == "__main__":
     input_path = sys.argv[1] if len(sys.argv) > 1 else "/home/daatsi-aeres/IsaacLab/logs/rsl_rl/g1_pick/test/model_4999_perfect_pick_v3.pt"
-    output_path = input_path.replace(".pt", "_padded_75dim.pt")
+    output_path = input_path.replace(".pt", "_padded_96dim.pt")
     print(f"Padding checkpoint: {input_path}")
     print(f"Old dim: {OLD_DIM} -> New dim: {NEW_DIM} (inserting {NUM_NEW} dims at index {INSERT_AT})\n")
     pad_checkpoint(input_path, output_path)

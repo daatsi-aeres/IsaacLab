@@ -46,3 +46,17 @@ def target_object_lifted(
     target_object: RigidObject = env.scene[object_cfg.name]
     object_height = target_object.data.root_pos_w[:, 2] - env.scene.env_origins[:, 2]
     return object_height > success_height
+
+
+def any_distractor_dropped(
+    env: ManagerBasedRLEnv,
+    minimum_height: float,
+    distractor_names: list[str],
+) -> torch.Tensor:
+    """Termination if ANY distractor in the list falls below minimum_height.
+    Aggregates multiple distractors into a single termination signal for clean logging."""
+    any_dropped = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    for name in distractor_names:
+        obj: RigidObject = env.scene[name]
+        any_dropped |= obj.data.root_pos_w[:, 2] < minimum_height
+    return any_dropped
